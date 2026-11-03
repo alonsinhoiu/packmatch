@@ -170,6 +170,7 @@ export async function POST(req: Request) {
     if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
       return NextResponse.json(
         {
+          errorCode: "PAYLOAD_TOO_LARGE",
           error:
             "El cuerpo de la solicitud supera el límite de 12 MB (2 documentos de hasta 4 MB cada uno en base64). Reduce el tamaño de los documentos e inténtalo de nuevo.",
         },
@@ -182,6 +183,7 @@ export async function POST(req: Request) {
   if (!apiKey) {
     return NextResponse.json(
       {
+        errorCode: "MISSING_API_KEY",
         error:
           "MODEL_API_KEY no está configurada en el servidor (.env). No se pueden realizar extracciones en vivo.",
       },
@@ -196,6 +198,7 @@ export async function POST(req: Request) {
     if (!invoiceDataUrl || !packingListDataUrl) {
       return NextResponse.json(
         {
+          errorCode: "MISSING_DOCUMENTS",
           error:
             "Se requieren tanto la imagen de Commercial Invoice como la de Packing List.",
         },
@@ -208,14 +211,14 @@ export async function POST(req: Request) {
       "Commercial Invoice"
     );
     if (!invCheck.valid) {
-      return NextResponse.json({ error: invCheck.error }, { status: 422 });
+      return NextResponse.json({ errorCode: "INVALID_INVOICE_FILE", error: invCheck.error }, { status: 422 });
     }
     const plCheck = validateDataUrlAndMagicBytes(
       packingListDataUrl,
       "Packing List"
     );
     if (!plCheck.valid) {
-      return NextResponse.json({ error: plCheck.error }, { status: 422 });
+      return NextResponse.json({ errorCode: "INVALID_PACKING_FILE", error: plCheck.error }, { status: 422 });
     }
 
     // Rate-limit ANTES de consumir la API de Meta (cada llamada cuesta
@@ -225,7 +228,9 @@ export async function POST(req: Request) {
     if (!rate.allowed) {
       return NextResponse.json(
         {
+          errorCode: "RATE_LIMITED",
           error: `Demasiadas solicitudes. Has superado el límite de 10 extracciones por minuto. Inténtalo de nuevo en ${rate.retryAfterSeconds} segundos.`,
+          retryAfterSeconds: rate.retryAfterSeconds,
         },
         {
           status: 429,
@@ -282,7 +287,7 @@ export async function POST(req: Request) {
       const errText = await metaResp.text();
       const safeErr = redactSecret(errText.slice(0, 400), apiKey);
       return NextResponse.json(
-        { error: `Error HTTP ${metaResp.status} desde Meta API: ${safeErr}` },
+        { errorCode: "META_HTTP_ERROR", status: metaResp.status, detail: safeErr, error: `Error HTTP ${metaResp.status} desde Meta API: ${safeErr}` },
         { status: metaResp.status }
       );
     }
@@ -290,12 +295,12 @@ export async function POST(req: Request) {
     const respJson = await metaResp.json();
     const choice = respJson.choices?.[0];
     if (!choice) {
-      return NextResponse.json({ error: "No response choice returned by Meta Model API" }, { status: 502 });
+      return NextResponse.json({ errorCode: "META_EMPTY_CHOICE", error: "No response choice returned by Meta Model API" }, { status: 502 });
     }
 
     if (choice.finish_reason === "length") {
       return NextResponse.json(
-        { error: "Document is too dense; output was truncated by model token limits. Please split multi-page shipments." },
+        { errorCode: "TRUNCATED_OUTPUT", error: "Document is too dense; output was truncated by model token limits. Please split multi-page shipments." },
         { status: 422 }
       );
     }
@@ -335,7 +340,7 @@ export async function POST(req: Request) {
   } catch (err: any) {
     const safeMsg = redactSecret(String(err?.message || err), apiKey);
     return NextResponse.json(
-      { error: `Fallo en extracción: ${safeMsg}` },
+      { errorCode: "EXTRACTION_FAILED", detail: safeMsg, error: `Fallo en extracción: ${safeMsg}` },
       { status: 500 }
     );
   }

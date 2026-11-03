@@ -27,6 +27,17 @@ import {
 import { BrandLogo } from "@/components/BrandLogo";
 import { PackMatchStepper } from "@/components/PackMatchStepper";
 import { PackMatchMemo } from "@/components/PackMatchMemo";
+import { UiLocaleSwitcher } from "@/components/UiLocaleSwitcher";
+import { UiLocaleProvider, useUiLocale } from "@/lib/i18n/UiLocaleContext";
+import { formatTemplate, getDictionary } from "@/lib/i18n/dictionaries";
+import { getLocaleFormatters } from "@/lib/i18n/format";
+import {
+  describeFinding,
+  formatOriginLabel,
+  shortFindingLabel,
+  shortFindingTitle,
+} from "@/lib/i18n/findings";
+import type { UiLocale } from "@/lib/i18n/locale";
 import { isPdfFile, pdfFirstPageToPngDataUrl } from "@/lib/pdf-to-image";
 import {
   Plus, RotateCcw, FileText, Package, ArrowRight, ArrowLeft, X, Copy, Download,
@@ -34,78 +45,25 @@ import {
 } from "lucide-react";
 
 /* ==========================================================================
-   Formato numérico + etiquetas humanas (preservados de la versión anterior)
+   Formato numérico localizado (es-CL / en-US) + etiquetas humanas
    ========================================================================== */
-
-function formatEs(value: number, minDec: number, maxDec: number): string {
-  const fixed = Math.abs(value).toFixed(maxDec);
-  const [intPart, decRaw = ""] = fixed.split(".");
-  let dec = decRaw.replace(/0+$/, "");
-  while (dec.length < minDec) dec += "0";
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `${value < 0 ? "-" : ""}${grouped}${dec ? `,${dec}` : ""}`;
-}
-
-const fmtCurrency = { format: (v: number) => formatEs(v, 2, 2) };
-const fmtNumber = { format: (v: number) => formatEs(v, 0, 2) };
 
 function formatNowTime(): string {
   const d = new Date();
   return d.toTimeString().slice(0, 8);
 }
 
-const HUMAN_CASE_LABELS: Record<
-  string,
-  { number: string; name: string; summary: string }
-> = {
-  C01_correcto_asimetrico: {
-    number: "Ejemplo 1",
-    name: "Todo coincide",
-    summary: "3 productos repartidos en 5 cajas sin errores",
-  },
-  C02_discrepancia_cantidad_y_subtotal: {
-    number: "Ejemplo 2",
-    name: "Faltan unidades y mal sumado",
-    summary: "En las cajas vienen menos piezas de las que cobran",
-  },
-  C03_discrepancia_pesos_y_lbs: {
-    number: "Ejemplo 3",
-    name: "Error en pesos de cajas",
-    summary: "Una caja llena figura pesando menos que el producto suelto",
-  },
-  C04_ambiguo_pcs_sets_sin_factor: {
-    number: "Ejemplo 4",
-    name: "Kits vs. Piezas sueltas",
-    summary: "Cobran por Sets pero el almacén contó piezas sin indicar equivalencia",
-  },
-  C05_ambiguo_sku_alias_y_muestra_no_declarada: {
-    number: "Ejemplo 5",
-    name: "Caja extra no declarada",
-    summary: "Metieron muestras gratis en una caja que no figuran en la factura",
-  },
-  C06_denso_celdas_combinadas_y_escaneo: {
-    number: "Ejemplo 6",
-    name: "Carga en varios palets",
-    summary: "6 productos repartidos en 11 filas con faltante y duda de Kits",
-  },
-  C07_formato_real_sin_ids: {
-    number: "Ejemplo 7",
-    name: "Factura estándar de fábrica",
-    summary: "Formato comercial clásico con faltante en cajas y Kits por confirmar",
-  },
-};
-
-function humanLabelFor(caseId: string): {
-  number: string;
-  name: string;
-  summary: string;
-} {
+function humanLabelFor(
+  caseId: string,
+  locale: UiLocale,
+  dictCases: Record<string, { number: string; name: string; summary: string }>
+): { number: string; name: string; summary: string } {
   const found = PRELOADED_CASES.find((c) => c.case_id === caseId);
   return (
-    HUMAN_CASE_LABELS[caseId] || {
+    dictCases[caseId] || {
       number: caseId.split("_")[0],
       name: found?.title ?? caseId,
-      summary: found?.subtitle ?? "",
+      subtitle: found?.subtitle ?? "",
     }
   );
 }
@@ -116,178 +74,51 @@ function shortCaseCode(caseId: string): string {
   return caseId.split("_")[0];
 }
 
-/** Etiqueta corta del tipo de hallazgo para el selector de enfoque (Fase 2). */
-function shortFindingLabel(code: Finding["code"]): string {
+/** Localiza un error de extracción del servidor por código estable; nunca oculta fallos. */
+function localizeExtractError(
+  locale: UiLocale,
+  code: string | null,
+  rawMessage: string,
+  retrySeconds?: number
+): string {
+  const e = getDictionary(locale).extractErrors;
   switch (code) {
-    case "QTY_MISMATCH":
-      return "Faltante / sobrante";
-    case "UNIT_AMBIGUITY_UNCONVERTIBLE":
-      return "Kits sin equivalencia";
-    case "INVOICE_LINE_MATH_ERROR":
-      return "Error de multiplicación";
-    case "WEIGHT_LOGIC_VIOLATION":
-      return "Peso imposible";
-    case "TOTAL_GROSS_WEIGHT_MISMATCH":
-      return "Descuadre de peso total";
-    case "SKU_IDENTIFIER_AMBIGUITY":
-      return "Código distinto";
-    case "UNDECLARED_ITEM_IN_PACKING_LIST":
-      return "No declarado en factura";
-    case "MISSING_ITEM_IN_PACKING_LIST":
-      return "Ausente en cajas";
-    case "CARTON_COUNT_MISMATCH":
-      return "Descuadre de bultos";
-    case "PACKING_ROW_MATH_ERROR":
-      return "Error cajas × unidades";
+    case "PAYLOAD_TOO_LARGE":
+      return e.payloadTooLarge;
+    case "MISSING_API_KEY":
+      return e.missingApiKey;
+    case "MISSING_DOCUMENTS":
+      return e.missingDocuments;
+    case "RATE_LIMITED": {
+      let seconds = retrySeconds;
+      if (seconds === undefined) {
+        const m = rawMessage.match(/(\d+)\s*(segundos|seconds)/i);
+        seconds = m ? Number(m[1]) : 60;
+      }
+      return formatTemplate(e.rateLimited, { seconds: seconds ?? 60 });
+    }
+    case "META_HTTP_ERROR": {
+      const m = rawMessage.match(/Error HTTP (\S+) desde Meta API: ([\s\S]*)/);
+      return formatTemplate(e.metaHttp, {
+        status: m ? m[1] : rawMessage.slice(0, 60),
+        detail: (m ? m[2] : rawMessage).slice(0, 400),
+      });
+    }
+    case "META_EMPTY_CHOICE":
+      return e.metaEmptyChoice;
+    case "TRUNCATED_OUTPUT":
+      return e.truncated;
+    case "EXTRACTION_FAILED": {
+      const m = rawMessage.match(/Fallo en extracción: ([\s\S]*)/);
+      return formatTemplate(e.failed, { message: m ? m[1] : rawMessage });
+    }
+    case "INVALID_INVOICE_FILE":
+    case "INVALID_PACKING_FILE":
+      return formatTemplate(e.invalidFile, { message: rawMessage });
     default:
-      return "Observación";
-  }
-}
-
-function formatOriginLabel(origin: string): string {
-  if (origin === "INV-HEADER") return "Totales de Factura";
-  if (origin === "PL-HEADER") return "Totales de Lista de Empaque";
-  if (origin.startsWith("INV-L")) {
-    return `Factura Línea ${origin.replace("INV-L", "")}`;
-  }
-  if (origin.startsWith("PL-R")) {
-    return `Empaque Fila ${origin.replace("PL-R", "")}`;
-  }
-  return origin;
-}
-
-
-function shortFindingTitle(f: Finding, invoice: InvoiceData, skuSummaries: SkuReconciliationSummary[]): string {
-  const sum = skuSummaries.find((x) => x.sku === f.sku);
-  const invLine = invoice.lines.find((l) => l.sku === f.sku);
-  switch (f.code) {
-    case "QTY_MISMATCH": {
-      const inv = comparableQuantities(sum)?.invoiceQty ?? sum?.invoiceQty ?? invLine?.qty ?? 0;
-      const pl = sum?.packingTotalQty ?? 0;
-      const d = Math.abs(pl - inv);
-      return pl < inv ? `Faltan ${fmtNumber.format(d)} unidades \u00b7 ${f.sku}` : `Sobran ${fmtNumber.format(d)} unidades \u00b7 ${f.sku}`;
-    }
-    case "INVOICE_LINE_MATH_ERROR": return `Importe incorrecto \u00b7 ${f.sku}`;
-    case "WEIGHT_LOGIC_VIOLATION": return `Peso bruto menor que neto \u00b7 ${f.sku}`;
-    case "TOTAL_GROSS_WEIGHT_MISMATCH": return "Diferencia de peso total";
-    case "UNIT_AMBIGUITY_UNCONVERTIBLE": return `Equivalencia de sets pendiente \u00b7 ${f.sku}`;
-    case "SKU_IDENTIFIER_AMBIGUITY": return `Alias pendiente \u00b7 ${f.sku}`;
-    case "UNDECLARED_ITEM_IN_PACKING_LIST": return `Producto no declarado \u00b7 ${f.sku}`;
-    case "MISSING_ITEM_IN_PACKING_LIST": return `Ausente en empaque \u00b7 ${f.sku}`;
-    case "CARTON_COUNT_MISMATCH": return "Descuadre de bultos";
-    case "PACKING_ROW_MATH_ERROR": return `Error cajas \u00d7 unidades \u00b7 ${f.sku}`;
-    default: return `Observaci\u00f3n \u00b7 ${f.sku}`;
-  }
-}
-
-function describeFindingInPlainSpanish(
-  f: Finding,
-  invoice: InvoiceData,
-  packingList: PackingListData,
-  skuSummaries: SkuReconciliationSummary[]
-): { title: string; explanation: string; locationPills: string[] } {
-  const locationPills = f.origins.map(formatOriginLabel);
-  const skuSum = skuSummaries.find((s) => s.sku === f.sku);
-  const invLine = invoice.lines.find((l) => l.sku === f.sku);
-  const plRows = packingList.rows.filter((r) => f.origins.includes(r.row_id));
-  const prodDesc = invLine?.description ? ` (${invLine.description})` : "";
-
-  switch (f.code) {
-    case "QTY_MISMATCH": {
-      const invQty = comparableQuantities(skuSum)?.invoiceQty ?? skuSum?.invoiceQty ?? invLine?.qty ?? 0;
-      const plQty = skuSum?.packingTotalQty ?? 0;
-      const diff = plQty - invQty;
-      const absDiff = Math.abs(diff);
-      const breakdown =
-        plRows.length > 1
-          ? ` (${plRows.map((r) => `${r.total_qty} en ${r.carton_range}`).join(" + ")})`
-          : plRows.length === 1
-            ? ` (en ${plRows[0].carton_range})`
-            : "";
-      return {
-        title:
-          diff < 0
-            ? `Faltan ${fmtNumber.format(absDiff)} unidades del producto ${f.sku} en las cajas`
-            : `Vienen ${fmtNumber.format(absDiff)} unidades de más del producto ${f.sku} en las cajas`,
-        explanation: `En la Factura te cobran ${fmtNumber.format(invQty)} unidades de ${f.sku}${prodDesc}, pero al sumar las cajas de la Lista de Empaque${breakdown} aparecen ${fmtNumber.format(plQty)} unidades.${skuSum?.conversionFactorUsed ? ` Equivalencia aplicada: 1 SET = ${skuSum.conversionFactorUsed} PCS.` : ""}`,
-        locationPills,
-      };
-    }
-    case "UNIT_AMBIGUITY_UNCONVERTIBLE": {
-      const invQty = invLine?.qty ?? skuSum?.invoiceQty ?? 0;
-      const plQty = skuSum?.packingTotalQty ?? 0;
-      return {
-        title: `No se sabe cuántas piezas trae cada Kit/Set del producto ${f.sku}`,
-        explanation: `La Factura cobra ${fmtNumber.format(invQty)} Sets/Kits${prodDesc}, mientras que el almacén contó ${fmtNumber.format(plQty)} piezas sueltas en las cajas. Como ningún documento indica cuántas piezas vienen dentro de cada Set, no es seguro adivinarlo.`,
-        locationPills,
-      };
-    }
-    case "INVOICE_LINE_MATH_ERROR": {
-      const qty = invLine?.qty ?? 0;
-      const price = invLine?.unit_price ?? 0;
-      const declared = invLine?.line_amount ?? 0;
-      const expected = qty * price;
-      return {
-        title: `Error de multiplicación en el cobro del producto ${f.sku}`,
-        explanation: `En la Factura multiplicaron ${fmtNumber.format(qty)} unidades × $${fmtCurrency.format(price)} y anotaron $${fmtCurrency.format(declared)}, pero el resultado correcto es $${fmtCurrency.format(expected)}.`,
-        locationPills,
-      };
-    }
-    case "WEIGHT_LOGIC_VIOLATION": {
-      return {
-        title: `Peso imposible en ${f.sku}: la caja llena figura pesando menos que el producto sin caja`,
-        explanation: `En la Lista de Empaque anotaron un Peso Bruto (con caja) menor que el Peso Neto (solo producto). Esto provoca rechazo automático en el sistema de Aduana.`,
-        locationPills,
-      };
-    }
-    case "TOTAL_GROSS_WEIGHT_MISMATCH": {
-      return {
-        title: `La suma del peso de las cajas no coincide con el peso total declarado`,
-        explanation: f.detail,
-        locationPills,
-      };
-    }
-    case "SKU_IDENTIFIER_AMBIGUITY": {
-      return {
-        title: `El código del producto está escrito diferente en la Factura y en las Cajas`,
-        explanation: `La Factura lo llama "${f.sku}" y la Lista de Empaque lo llama "${skuSum?.pairedPlSku || ""}". La cantidad coincide, pero ambos documentos deben tener exactamente el mismo código.`,
-        locationPills,
-      };
-    }
-    case "UNDECLARED_ITEM_IN_PACKING_LIST": {
-      return {
-        title: `Hay un producto dentro de las cajas (${f.sku}) que no aparece en la Factura`,
-        explanation: `En la Lista de Empaque figuran unidades de "${f.sku}" que no están declaradas en la Factura Comercial. Incluso si son muestras sin costo, por ley deben figurar en la factura.`,
-        locationPills,
-      };
-    }
-    case "MISSING_ITEM_IN_PACKING_LIST": {
-      return {
-        title: `El producto ${f.sku} figura cobrado en la Factura pero no aparece en ninguna caja`,
-        explanation: `La Factura cobra unidades de "${f.sku}"${prodDesc}, pero ese producto no aparece en la Lista de Empaque.`,
-        locationPills,
-      };
-    }
-    case "CARTON_COUNT_MISMATCH": {
-      return {
-        title: `El número total de cajas declaradas no coincide con la suma de las filas`,
-        explanation: f.detail,
-        locationPills,
-      };
-    }
-    case "PACKING_ROW_MATH_ERROR": {
-      return {
-        title: `Error al multiplicar cajas por unidades en el producto ${f.sku}`,
-        explanation: f.detail,
-        locationPills,
-      };
-    }
-    default:
-      return {
-        title: `Observación en ${f.sku}`,
-        explanation: f.detail,
-        locationPills,
-      };
+      return rawMessage
+        ? formatTemplate(e.unknown, { message: rawMessage })
+        : e.unknown.replace("{message}", "");
   }
 }
 
@@ -350,6 +181,7 @@ function DropZone({
   onFile: (file: File) => void; icon: React.ReactNode;
 }) {
   const [dragOver, setDragOver] = useState(false);
+  const { dict } = useUiLocale();
   return (
     <label
       htmlFor={inputId}
@@ -360,11 +192,11 @@ function DropZone({
     >
       <span className="flex items-start justify-between gap-3">
         <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-(--pm-dark-raised) text-(--pm-sage)">{icon}</span>
-        <span className="text-[10px] tracking-widest text-(--pm-dark-secondary)">PDF / PNG / JPG</span>
+        <span className="text-[10px] tracking-widest text-(--pm-dark-secondary)">{dict.landing.dropFormats}</span>
       </span>
       <span className="block mt-8 text-base font-bold text-(--pm-paper)">{title}</span>
-      <span className="block mt-1 text-sm text-(--pm-dark-secondary)">{hint} o <span className="underline underline-offset-2 text-(--pm-paper)">elige uno</span></span>
-      {loadedLabel && <span className="inline-block mt-3 text-xs font-semibold px-3 py-1 rounded-full bg-(--pm-primary) text-white">Cargado: {loadedLabel}</span>}
+      <span className="block mt-1 text-sm text-(--pm-dark-secondary)">{hint} {dict.landing.dropOr} <span className="underline underline-offset-2 text-(--pm-paper)">{dict.landing.dropChoose}</span></span>
+      {loadedLabel && <span className="inline-block mt-3 text-xs font-semibold px-3 py-1 rounded-full bg-(--pm-primary) text-white">{formatTemplate(dict.landing.dropLoaded, { name: loadedLabel })}</span>}
       <input id={inputId} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
     </label>
@@ -375,7 +207,10 @@ function DropZone({
    Componente principal
    ========================================================================== */
 
-export default function PackMatchWorkbench() {
+function PackMatchWorkbench() {
+  const { locale, dict } = useUiLocale();
+  const { fmtCurrency, fmtNumber } = useMemo(() => getLocaleFormatters(locale), [locale]);
+  const pluralS = (n: number) => (n === 1 ? "" : "s");
   // El espacio de trabajo arranca vacío ("desde ceros"): el usuario elige cómo
   // ingresar su embarque en el Hub de Entrada Tri-Modal.
   const [shipmentMode, setShipmentMode] = useState<ShipmentMode>("empty");
@@ -466,6 +301,7 @@ export default function PackMatchWorkbench() {
       if (filterParam && ["all", "disc", "match"].includes(filterParam)) {
         setMatrixFilter(filterParam as "all" | "disc" | "match");
       }
+      // ?lang= controla exclusivamente el idioma de la minuta (se conserva).
       const langParam = params.get("lang");
       if (langParam === "en" || langParam === "es") {
         setMemoLang(langParam);
@@ -615,16 +451,14 @@ export default function PackMatchWorkbench() {
     setPasteError(null);
     let invLines: InvoiceLine[], plRows: PackingListRow[];
     try {
-      invLines = parseInvoicePaste(pasteInvoiceText);
-      plRows = parsePackingPaste(pastePackingText);
+      invLines = parseInvoicePaste(pasteInvoiceText, locale);
+      plRows = parsePackingPaste(pastePackingText, locale);
     } catch (error) {
-      setPasteError(error instanceof Error ? error.message : "No se pudo leer la tabla.");
+      setPasteError(error instanceof Error ? error.message : formatTemplate(dict.pasteModal.unreadable, {}));
       return;
     }
     if (invLines.length === 0 && plRows.length === 0) {
-      setPasteError(
-        "No se detectaron renglones válidos. Pega al menos una línea con SKU y cantidad en alguno de los dos cuadros."
-      );
+      setPasteError(dict.pasteModal.noValidRows);
       return;
     }
     const grossSum = plRows.reduce((a, r) => a + r.gross_weight / (r.weight_unit === "LBS" ? LBS_PER_KG : 1), 0);
@@ -929,7 +763,7 @@ export default function PackMatchWorkbench() {
       });
       const data = await resp.json();
       if (!resp.ok || data.error) {
-        throw new Error(data.error || `HTTP ${resp.status}`);
+        throw { code: data.errorCode ?? null, message: String(data.error || `HTTP ${resp.status}`), retryAfterSeconds: data.retryAfterSeconds };
       }
       setInvoice(data.extracted.invoice);
       setPackingList(data.extracted.packing_list);
@@ -949,7 +783,10 @@ export default function PackMatchWorkbench() {
       ).findings[0];
       setHighlightedOrigins(firstFinding ? firstFinding.origins : []);
     } catch (err: unknown) {
-      setExtractError(String((err as Error)?.message || err));
+      const e = err as { code?: string | null; message?: unknown; retryAfterSeconds?: number };
+      const raw = String((e as { message?: unknown })?.message ?? err);
+      const code = typeof (e as { code?: unknown })?.code === "string" ? (e as { code: string }).code : null;
+      setExtractError(localizeExtractError(locale, code, raw, (e as { retryAfterSeconds?: number })?.retryAfterSeconds));
     } finally {
       setIsExtractingLive(false);
     }
@@ -996,68 +833,72 @@ export default function PackMatchWorkbench() {
   const isWorkspaceEmpty =
     invoice.lines.length === 0 && packingList.rows.length === 0;
   const demoHuman =
-    shipmentMode === "demo" ? humanLabelFor(activeCaseMeta.case_id) : null;
+    shipmentMode === "demo" ? humanLabelFor(activeCaseMeta.case_id, locale, dict.cases) : null;
 
-  const inputIssues = workspaceIssues(invoice, packingList);
+  const inputIssues = workspaceIssues(invoice, packingList, locale);
   const hasData = !isWorkspaceEmpty;
   const canExport = hasData && inputIssues.length === 0;
   const findings = reconciliation.findings;
   const selIdx = findings.length > 0 ? Math.min(selectedFindingIdx, findings.length - 1) : 0;
   const selFinding = findings.length > 0 ? findings[selIdx] : null;
-  const selHuman = selFinding ? describeFindingInPlainSpanish(selFinding, invoice, packingList, reconciliation.skuSummaries) : null;
+  const selHuman = selFinding ? describeFinding(selFinding, invoice, packingList, reconciliation.skuSummaries, locale) : null;
   const selSum = selFinding ? reconciliation.skuSummaries.find((x) => x.sku === selFinding.sku) : undefined;
   const selComparable = comparableQuantities(selSum);
   const selInvLine = selFinding ? invoice.lines.find((l) => l.sku === selFinding.sku) : undefined;
   const focusFinding = typeof focusFindingIdx === "number" && findings[focusFindingIdx] ? findings[focusFindingIdx] : null;
-  const eyebrow = shipmentMode === "demo" ? `EJEMPLO ${shortCaseCode(activeCaseMeta.case_id)}` : shipmentMode === "workspace" ? "ESPACIO DE TRABAJO" : "";
+  const eyebrow = shipmentMode === "demo" ? formatTemplate(dict.diagnosis.eyebrowExample, { code: shortCaseCode(activeCaseMeta.case_id) }) : shipmentMode === "workspace" ? dict.diagnosis.eyebrowWorkspace : "";
+  const currencyCode = invoice.currency || "USD";
   const steps = [
-    { n: 1 as const, label: "Diagnóstico y alertas" },
-    { n: 2 as const, label: "Cotejo en documentos" },
-    { n: 3 as const, label: "Matriz por producto" },
-    { n: 4 as const, label: "Mensaje al proveedor" },
+    { n: 1 as const, label: dict.stepper.steps[0] },
+    { n: 2 as const, label: dict.stepper.steps[1] },
+    { n: 3 as const, label: dict.stepper.steps[2] },
+    { n: 4 as const, label: dict.stepper.steps[3] },
   ];
+  const discPlural = locale === "en"
+    ? discrepanciesCount === 1 ? "y" : "ies"
+    : pluralS(discrepanciesCount);
 
   const editableTables = (
     <div className="bg-white rounded-2xl border border-(--pm-border) overflow-hidden">
-      <div className="flex flex-wrap items-center gap-2 px-5 pt-4" role="tablist" aria-label="Tablas de captura">
+      <div className="flex flex-wrap items-center gap-2 px-5 pt-4" role="tablist" aria-label={dict.capture.tabsLabel}>
         <button type="button" role="tab" aria-selected={editTab === "invoice"} onClick={() => setEditTab("invoice")} className={`btn-press inline-flex items-center gap-2 px-3 py-2 text-sm font-bold border-b-[3px] cursor-pointer ${editTab === "invoice" ? "border-(--pm-primary) text-(--pm-ink)" : "border-transparent text-(--pm-text-secondary)"}`}>
-          <FileText className="w-4 h-4" aria-hidden="true" /> Factura comercial
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-(--pm-border) text-(--pm-text-secondary)">{invoice.invoice_no === "BORRADOR" ? "BORRADOR" : `${invoice.lines.length} filas`}</span>
+          <FileText className="w-4 h-4" aria-hidden="true" /> {dict.capture.invoiceTab}
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-(--pm-border) text-(--pm-text-secondary)">{invoice.invoice_no === "BORRADOR" ? dict.capture.draft : formatTemplate(dict.capture.rowsBadge, { count: invoice.lines.length })}</span>
         </button>
         <span className="hidden sm:block w-px h-6 bg-(--pm-border)" aria-hidden="true" />
         <button type="button" role="tab" aria-selected={editTab === "packing"} onClick={() => setEditTab("packing")} className={`btn-press inline-flex items-center gap-2 px-3 py-2 text-sm font-bold border-b-[3px] cursor-pointer ${editTab === "packing" ? "border-(--pm-primary) text-(--pm-ink)" : "border-transparent text-(--pm-text-secondary)"}`}>
-          <Package className="w-4 h-4" aria-hidden="true" /> Lista de empaque
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-(--pm-border) text-(--pm-text-secondary)">{packingList.rows.length} filas</span>
+          <Package className="w-4 h-4" aria-hidden="true" /> {dict.capture.packingTab}
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-(--pm-border) text-(--pm-text-secondary)">{formatTemplate(dict.capture.rowsBadge, { count: packingList.rows.length })}</span>
         </button>
       </div>
       {editTab === "invoice" ? (
         <div className="p-5">
           <div className="flex flex-wrap items-end gap-3 mb-4">
-            <div><label htmlFor="cap-cartons" className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">CAJAS DECLARADAS</label>
+            <div><label htmlFor="cap-cartons" className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">{dict.capture.boxesDeclared}</label>
               <input id="cap-cartons" type="number" value={invoice.declared_total_cartons} onChange={(e) => { const v = Number(e.target.value) || 0; appendAudit("CELL_EDIT", "INV-HEADER", "declared_total_cartons", invoice.declared_total_cartons, v); setInvoice((p) => ({ ...p, declared_total_cartons: v })); }} className="mt-1 w-36 px-3 py-2 bg-white border border-(--pm-border) rounded-lg text-sm font-semibold" /></div>
-            <div><label htmlFor="cap-net" className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">PESO NETO (KG)</label>
+            <div><label htmlFor="cap-net" className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">{dict.capture.netKg}</label>
               <input id="cap-net" type="number" step="0.1" value={invoice.declared_total_net_kg} onChange={(e) => { const v = Number(e.target.value) || 0; appendAudit("CELL_EDIT", "INV-HEADER", "declared_total_net_kg", invoice.declared_total_net_kg, v); setInvoice((p) => ({ ...p, declared_total_net_kg: v })); }} className="mt-1 w-36 px-3 py-2 bg-white border border-(--pm-border) rounded-lg text-sm font-semibold" /></div>
-            <div><label htmlFor="cap-gross" className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">PESO BRUTO (KG)</label>
+            <div><label htmlFor="cap-gross" className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">{dict.capture.grossKg}</label>
               <input id="cap-gross" type="number" step="0.1" value={invoice.declared_total_gross_kg} onChange={(e) => { const v = Number(e.target.value) || 0; appendAudit("CELL_EDIT", "INV-HEADER", "declared_total_gross_kg", invoice.declared_total_gross_kg, v); setInvoice((p) => ({ ...p, declared_total_gross_kg: v })); }} className="mt-1 w-36 px-3 py-2 bg-white border border-(--pm-border) rounded-lg text-sm font-semibold" /></div>
-            <button type="button" onClick={addInvoiceLine} className="btn-press ml-auto inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> Agregar línea</button>
+            <button type="button" onClick={addInvoiceLine} className="btn-press ml-auto inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> {dict.capture.addLine}</button>
           </div>
           <div className="overflow-x-auto rounded-xl border border-(--pm-border)">
             <table className="w-full text-left text-sm min-w-[640px]">
-              <thead><tr className="bg-(--pm-selection) text-(--pm-ink) text-xs"><th scope="col" className="py-2.5 px-3">Línea</th><th scope="col" className="py-2.5 px-3">Producto</th><th scope="col" className="py-2.5 px-3">Cant.</th><th scope="col" className="py-2.5 px-3">Unidad</th><th scope="col" className="py-2.5 px-3">Precio</th><th scope="col" className="py-2.5 px-3">Subtotal</th><th scope="col" className="py-2.5 px-3">Piezas / set</th><th scope="col" className="py-2.5 px-3"><span className="sr-only">Eliminar</span></th></tr></thead>
+              <thead><tr className="bg-(--pm-selection) text-(--pm-ink) text-xs"><th scope="col" className="py-2.5 px-3">{dict.capture.colLine}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colProduct}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colQty}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colUnit}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colPrice}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colSubtotal}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colPcsPerSet}</th><th scope="col" className="py-2.5 px-3"><span className="sr-only">{dict.capture.colDelete}</span></th></tr></thead>
               <tbody className="divide-y divide-(--pm-border)">
                 {invoice.lines.map((line, idx) => (
                   <tr key={line.line_id}>
-                    <td className="py-2 px-3 text-(--pm-text-secondary) whitespace-nowrap">Línea {idx + 1}</td>
-                    <td className="py-2 px-2"><input type="text" aria-label={`SKU línea ${idx + 1}`} value={line.sku} onChange={(e) => updateInvoiceLine(idx, "sku", e.target.value)} className="w-28 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><input type="number" aria-label={`Cantidad línea ${idx + 1}`} value={line.qty} onChange={(e) => updateInvoiceLine(idx, "qty", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><select aria-label={`Unidad línea ${idx + 1}`} value={line.unit} onChange={(e) => updateInvoiceLine(idx, "unit", e.target.value)} className="px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm"><option value="PCS">PCS</option><option value="SETS">SETS</option></select></td>
-                    <td className="py-2 px-2"><input type="number" step="0.5" aria-label={`Precio línea ${idx + 1}`} value={line.unit_price} onChange={(e) => updateInvoiceLine(idx, "unit_price", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><input type="number" step="1" aria-label={`Subtotal línea ${idx + 1}`} value={line.line_amount} onChange={(e) => updateInvoiceLine(idx, "line_amount", e.target.value)} className="w-24 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2 whitespace-nowrap">{line.explicit_pcs_per_set ? <span className="text-xs px-2 py-1 rounded-full bg-(--pm-selection) text-(--pm-primary) font-bold">1 SET = {line.explicit_pcs_per_set} PCS</span> : line.unit === "SETS" ? <input type="number" min={1} placeholder="Sin confirmar" aria-label={`Piezas por set línea ${idx + 1}`} value={line.operator_pcs_per_set ?? ""} onChange={(e) => updateInvoiceLine(idx, "operator_pcs_per_set", e.target.value)} className="w-28 px-2 py-1.5 bg-(--pm-warning-bg) border border-(--pm-warning-border) rounded-md text-xs" /> : <span className="text-(--pm-text-secondary)">-</span>}</td>
-                    <td className="py-2 px-2"><button type="button" onClick={() => removeInvoiceLine(idx)} aria-label={`Eliminar línea ${idx + 1}`} className="btn-press p-2 rounded-lg text-(--pm-error) hover:bg-(--pm-error-bg) cursor-pointer"><Trash2 className="w-4 h-4" aria-hidden="true" /></button></td>
+                    <td className="py-2 px-3 text-(--pm-text-secondary) whitespace-nowrap">{formatTemplate(dict.capture.lineLabel, { index: idx + 1 })}</td>
+                    <td className="py-2 px-2"><input type="text" aria-label={formatTemplate(dict.capture.skuAria, { index: idx + 1 })} value={line.sku} onChange={(e) => updateInvoiceLine(idx, "sku", e.target.value)} className="w-28 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><input type="number" aria-label={formatTemplate(dict.capture.qtyAria, { index: idx + 1 })} value={line.qty} onChange={(e) => updateInvoiceLine(idx, "qty", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><select aria-label={formatTemplate(dict.capture.unitAria, { index: idx + 1 })} value={line.unit} onChange={(e) => updateInvoiceLine(idx, "unit", e.target.value)} className="px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm"><option value="PCS">PCS</option><option value="SETS">SETS</option></select></td>
+                    <td className="py-2 px-2"><input type="number" step="0.5" aria-label={formatTemplate(dict.capture.priceAria, { index: idx + 1 })} value={line.unit_price} onChange={(e) => updateInvoiceLine(idx, "unit_price", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><input type="number" step="1" aria-label={formatTemplate(dict.capture.subtotalAria, { index: idx + 1 })} value={line.line_amount} onChange={(e) => updateInvoiceLine(idx, "line_amount", e.target.value)} className="w-24 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2 whitespace-nowrap">{line.explicit_pcs_per_set ? <span className="text-xs px-2 py-1 rounded-full bg-(--pm-selection) text-(--pm-primary) font-bold">1 SET = {line.explicit_pcs_per_set} PCS</span> : line.unit === "SETS" ? <input type="number" min={1} placeholder={dict.capture.noFactor} aria-label={formatTemplate(dict.capture.pcsPerSetAria, { index: idx + 1 })} value={line.operator_pcs_per_set ?? ""} onChange={(e) => updateInvoiceLine(idx, "operator_pcs_per_set", e.target.value)} className="w-28 px-2 py-1.5 bg-(--pm-warning-bg) border border-(--pm-warning-border) rounded-md text-xs" /> : <span className="text-(--pm-text-secondary)">-</span>}</td>
+                    <td className="py-2 px-2"><button type="button" onClick={() => removeInvoiceLine(idx)} aria-label={formatTemplate(dict.capture.deleteLineAria, { index: idx + 1 })} className="btn-press p-2 rounded-lg text-(--pm-error) hover:bg-(--pm-error-bg) cursor-pointer"><Trash2 className="w-4 h-4" aria-hidden="true" /></button></td>
                   </tr>
                 ))}
-                {invoice.lines.length === 0 && (<tr><td colSpan={8} className="py-10 px-3 text-center text-(--pm-text-secondary) border border-dashed border-(--pm-border) rounded-lg">Aún no hay productos. Agrega la primera línea.</td></tr>)}
+                {invoice.lines.length === 0 && (<tr><td colSpan={8} className="py-10 px-3 text-center text-(--pm-text-secondary) border border-dashed border-(--pm-border) rounded-lg">{dict.capture.noLines}</td></tr>)}
               </tbody>
             </table>
           </div>
@@ -1066,42 +907,42 @@ export default function PackMatchWorkbench() {
         <div className="p-5">
           <div className="flex flex-wrap items-end gap-3 mb-4">
             {([
-              ["declared_total_cartons", "Cajas declaradas en empaque"],
-              ["declared_total_net_kg", "Peso neto declarado en empaque (kg)"],
-              ["declared_total_gross_kg", "Peso bruto declarado en empaque (kg)"],
+              ["declared_total_cartons", dict.capture.packingBoxes],
+              ["declared_total_net_kg", dict.capture.packingNet],
+              ["declared_total_gross_kg", dict.capture.packingGross],
             ] as const).map(([field, label]) => (
               <div key={field}><label htmlFor={`packing-${field}`} className="block text-[11px] font-bold tracking-wide text-(--pm-ink)">{label}</label>
                 <input id={`packing-${field}`} type="number" min={0} step={field === "declared_total_cartons" ? 1 : "any"} value={packingList[field]} onChange={(e) => { const value = Number(e.target.value); if (!Number.isFinite(value) || value < 0 || (field === "declared_total_cartons" && !Number.isInteger(value))) return; appendAudit("CELL_EDIT", "PL-HEADER", field, packingList[field], value); setPackingList((previous) => ({ ...previous, [field]: value })); }} className="mt-1 w-36 px-3 py-2 bg-white border border-(--pm-border) rounded-lg text-sm font-semibold" />
               </div>
             ))}
-            <button type="button" onClick={addPackingRow} className="btn-press inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> Agregar fila</button></div>
+            <button type="button" onClick={addPackingRow} className="btn-press inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> {dict.capture.addRow}</button></div>
           <div className="overflow-x-auto rounded-xl border border-(--pm-border)">
             <table className="w-full text-left text-sm min-w-[720px]">
-              <thead><tr className="bg-(--pm-selection) text-(--pm-ink) text-xs"><th scope="col" className="py-2.5 px-3">Fila</th><th scope="col" className="py-2.5 px-3">Cajas / Palet</th><th scope="col" className="py-2.5 px-3">N° Cajas</th><th scope="col" className="py-2.5 px-3">Producto</th><th scope="col" className="py-2.5 px-3">Unid/Caja</th><th scope="col" className="py-2.5 px-3">Total Unid.</th><th scope="col" className="py-2.5 px-3">Peso Neto</th><th scope="col" className="py-2.5 px-3">Peso Bruto</th><th scope="col" className="py-2.5 px-3"><span className="sr-only">Eliminar</span></th></tr></thead>
+              <thead><tr className="bg-(--pm-selection) text-(--pm-ink) text-xs"><th scope="col" className="py-2.5 px-3">{dict.capture.colRow}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colCartons}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colCartonCount}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colProduct}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colUnitsPer}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colTotalUnits}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colNet}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colGross}</th><th scope="col" className="py-2.5 px-3"><span className="sr-only">{dict.capture.colDelete}</span></th></tr></thead>
               <tbody className="divide-y divide-(--pm-border)">
                 {packingList.rows.map((row, idx) => (
                   <tr key={row.row_id}>
-                    <td className="py-2 px-3 text-(--pm-text-secondary) whitespace-nowrap">Fila {idx + 1}</td>
-                    <td className="py-2 px-2"><input type="text" aria-label={`Rango de cajas fila ${idx + 1}`} value={row.carton_range} onChange={(e) => updatePackingRow(idx, "carton_range", e.target.value)} className="w-24 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2">{row.shared_carton ? <span className="text-xs px-2 py-1 rounded-full bg-(--pm-selection) font-bold">Caja compartida</span> : <input type="number" aria-label={`Número de cajas fila ${idx + 1}`} value={row.carton_count} onChange={(e) => updatePackingRow(idx, "carton_count", e.target.value)} className="w-16 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" />}</td>
-                    <td className="py-2 px-2"><input type="text" aria-label={`SKU fila ${idx + 1}`} value={row.sku} onChange={(e) => updatePackingRow(idx, "sku", e.target.value)} className="w-28 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><input type="number" aria-label={`Unidades por caja fila ${idx + 1}`} value={row.qty_per_carton} onChange={(e) => updatePackingRow(idx, "qty_per_carton", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><input type="number" aria-label={`Total unidades fila ${idx + 1}`} value={row.total_qty} onChange={(e) => updatePackingRow(idx, "total_qty", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm font-bold" /></td>
-                    <td className="py-2 px-2"><input type="number" step="0.5" aria-label={`Peso neto fila ${idx + 1}`} value={row.net_weight} onChange={(e) => updatePackingRow(idx, "net_weight", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><input type="number" step="0.5" aria-label={`Peso bruto fila ${idx + 1}`} value={row.gross_weight} onChange={(e) => updatePackingRow(idx, "gross_weight", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2"><button type="button" onClick={() => removePackingRow(idx)} aria-label={`Eliminar fila ${idx + 1}`} className="btn-press p-2 rounded-lg text-(--pm-error) hover:bg-(--pm-error-bg) cursor-pointer"><Trash2 className="w-4 h-4" aria-hidden="true" /></button></td>
+                    <td className="py-2 px-3 text-(--pm-text-secondary) whitespace-nowrap">{formatTemplate(dict.capture.rowLabel, { index: idx + 1 })}</td>
+                    <td className="py-2 px-2"><input type="text" aria-label={formatTemplate(dict.capture.rangeAria, { index: idx + 1 })} value={row.carton_range} onChange={(e) => updatePackingRow(idx, "carton_range", e.target.value)} className="w-24 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2">{row.shared_carton ? <span className="text-xs px-2 py-1 rounded-full bg-(--pm-selection) font-bold">{dict.capture.sharedCarton}</span> : <input type="number" aria-label={formatTemplate(dict.capture.cartonCountAria, { index: idx + 1 })} value={row.carton_count} onChange={(e) => updatePackingRow(idx, "carton_count", e.target.value)} className="w-16 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" />}</td>
+                    <td className="py-2 px-2"><input type="text" aria-label={formatTemplate(dict.capture.packingSkuAria, { index: idx + 1 })} value={row.sku} onChange={(e) => updatePackingRow(idx, "sku", e.target.value)} className="w-28 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><input type="number" aria-label={formatTemplate(dict.capture.unitsPerAria, { index: idx + 1 })} value={row.qty_per_carton} onChange={(e) => updatePackingRow(idx, "qty_per_carton", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><input type="number" aria-label={formatTemplate(dict.capture.totalUnitsAria, { index: idx + 1 })} value={row.total_qty} onChange={(e) => updatePackingRow(idx, "total_qty", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm font-bold" /></td>
+                    <td className="py-2 px-2"><input type="number" step="0.5" aria-label={formatTemplate(dict.capture.netAria, { index: idx + 1 })} value={row.net_weight} onChange={(e) => updatePackingRow(idx, "net_weight", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><input type="number" step="0.5" aria-label={formatTemplate(dict.capture.grossAria, { index: idx + 1 })} value={row.gross_weight} onChange={(e) => updatePackingRow(idx, "gross_weight", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><button type="button" onClick={() => removePackingRow(idx)} aria-label={formatTemplate(dict.capture.deleteRowAria, { index: idx + 1 })} className="btn-press p-2 rounded-lg text-(--pm-error) hover:bg-(--pm-error-bg) cursor-pointer"><Trash2 className="w-4 h-4" aria-hidden="true" /></button></td>
                   </tr>
                 ))}
-                {packingList.rows.length === 0 && (<tr><td colSpan={9} className="py-10 px-3 text-center text-(--pm-text-secondary)">Aún no hay filas de empaque. Agrega la primera fila.</td></tr>)}
+                {packingList.rows.length === 0 && (<tr><td colSpan={9} className="py-10 px-3 text-center text-(--pm-text-secondary)">{dict.capture.noRows}</td></tr>)}
               </tbody>
             </table>
           </div>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-4 px-5 py-3 border-t border-(--pm-border) text-sm text-(--pm-text-secondary)">
-        <span className="inline-flex items-center gap-2"><FileText className="w-4 h-4" aria-hidden="true" /> {invoice.lines.length} productos</span>
+        <span className="inline-flex items-center gap-2"><FileText className="w-4 h-4" aria-hidden="true" /> {formatTemplate(dict.capture.productsCount, { count: invoice.lines.length })}</span>
         <span className="w-px h-5 bg-(--pm-border)" aria-hidden="true" />
-        <span className="inline-flex items-center gap-2"><Package className="w-4 h-4" aria-hidden="true" /> {packingList.rows.length} filas de empaque</span>
+        <span className="inline-flex items-center gap-2"><Package className="w-4 h-4" aria-hidden="true" /> {formatTemplate(dict.capture.packingRowsCount, { count: packingList.rows.length })}</span>
       </div>
     </div>
   );
@@ -1109,31 +950,32 @@ export default function PackMatchWorkbench() {
   return (
     <div className={`min-h-screen flex flex-col ${shipmentMode === "empty" ? "bg-(--pm-ink) text-(--pm-paper)" : "bg-(--pm-paper) text-(--pm-ink)"}`}>
       <header className="bg-(--pm-ink) text-white border-b border-(--pm-dark-border)">
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 min-h-16 py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <div className="flex items-center gap-4 min-w-0">
             <BrandLogo size="sm" theme="dark" />
-            <span className="hidden md:inline-block border-l border-white/20 pl-4 text-sm text-(--pm-dark-secondary)">Conciliación pre-despacho</span>
+            <span className="hidden md:inline-block border-l border-white/20 pl-4 text-sm text-(--pm-dark-secondary)">{dict.header.tagline}</span>
           </div>
-          <div className="flex items-center gap-2">
-            {shipmentMode === "empty" && <span className="hidden lg:block text-sm text-(--pm-dark-secondary)">Factura comercial ↔ Lista de empaque</span>}
+          <div className="flex flex-wrap items-center gap-2">
+            <UiLocaleSwitcher />
+            {shipmentMode === "empty" && <span className="hidden lg:block text-sm text-(--pm-dark-secondary)">{dict.header.hubHint}</span>}
             {shipmentMode === "demo" && demoHuman && (
               <span className="hidden md:inline-flex items-center gap-2 text-xs text-(--pm-dark-secondary)">
-                Demo: <strong className="text-white">{shortCaseCode(activeCaseMeta.case_id)}</strong>
-                <button type="button" onClick={() => loadCaseObject(activeCaseMeta, dataMode)} className="underline underline-offset-2 hover:text-white cursor-pointer">Reiniciar</button>
+                {dict.header.demo} <strong className="text-white">{shortCaseCode(activeCaseMeta.case_id)}</strong>
+                <button type="button" onClick={() => loadCaseObject(activeCaseMeta, dataMode)} className="underline underline-offset-2 hover:text-white cursor-pointer">{dict.header.restart}</button>
               </span>
             )}
             {operatorEditsCount > 0 && shipmentMode !== "empty" && (
-              <button type="button" onClick={handleUndo} className="btn-press inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-(--pm-warning-border) text-(--pm-warning-border) text-xs font-bold cursor-pointer"><RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> Deshacer ({operatorEditsCount})</button>
+              <button type="button" onClick={handleUndo} className="btn-press inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-(--pm-warning-border) text-(--pm-warning-border) text-xs font-bold cursor-pointer"><RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> {formatTemplate(dict.header.undo, { count: operatorEditsCount })}</button>
             )}
             {shipmentMode !== "empty" && (
-              <button type="button" onClick={handleNewShipment} className="btn-press inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-(--pm-paper)/60 text-white text-sm font-bold hover:bg-(--pm-dark-surface) cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> Nuevo embarque</button>
+              <button type="button" onClick={handleNewShipment} className="btn-press inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-(--pm-paper)/60 text-white text-sm font-bold hover:bg-(--pm-dark-surface) cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> {dict.header.newShipment}</button>
             )}
           </div>
         </div>
       </header>
 
-      {inputIssues.length > 0 && shipmentMode !== "empty" && <div role="alert" className="bg-(--pm-warning-bg) border-b border-(--pm-warning-border) px-6 py-3 text-sm text-(--pm-warning-text)"><strong>Completa o corrige los datos antes de exportar.</strong><ul>{inputIssues.map((issue, index) => <li key={index}>{issue}</li>)}</ul></div>}
-      {extractError && <div role="alert" className="bg-(--pm-error-bg) border-b border-(--pm-error-border) px-6 py-2.5 text-sm text-(--pm-error) font-medium">No se pudo procesar el archivo: {extractError}</div>}
+      {inputIssues.length > 0 && shipmentMode !== "empty" && <div role="alert" className="bg-(--pm-warning-bg) border-b border-(--pm-warning-border) px-6 py-3 text-sm text-(--pm-warning-text)"><strong>{dict.alerts.completeData}</strong><ul>{inputIssues.map((issue, index) => <li key={index}>{issue}</li>)}</ul></div>}
+      {extractError && <div role="alert" className="bg-(--pm-error-bg) border-b border-(--pm-error-border) px-6 py-2.5 text-sm text-(--pm-error) font-medium">{formatTemplate(dict.alerts.extractFailed, { message: extractError })}</div>}
 
       {shipmentMode !== "empty" && (
         <PackMatchStepper steps={steps} activeStep={activeStep} onStep={goToStep} />
@@ -1141,41 +983,41 @@ export default function PackMatchWorkbench() {
 
       {shipmentMode === "empty" && (
         <main className="flex-1 w-full max-w-[1200px] mx-auto px-4 sm:px-6 py-10 sm:py-14">
-          <p className="text-[11px] font-bold tracking-[0.22em] text-(--pm-sage)">EL PUNTO DE ENCUENTRO</p>
-          <h1 className="mt-3 text-4xl sm:text-5xl font-black tracking-tight">Nuevo embarque</h1>
-          <p className="mt-3 text-base text-(--pm-dark-secondary)">La factura y el empaque, conectados desde el inicio.</p>
+          <p className="text-[11px] font-bold tracking-[0.22em] text-(--pm-sage)">{dict.landing.eyebrow}</p>
+          <h1 className="mt-3 text-4xl sm:text-5xl font-black tracking-tight">{dict.landing.title}</h1>
+          <p className="mt-3 text-base text-(--pm-dark-secondary)">{dict.landing.subtitle}</p>
 
           <div className="mt-10 grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-6 items-stretch">
-            <section aria-label="Factura comercial" className="rounded-2xl border border-(--pm-dark-border) bg-(--pm-dark-surface) p-4">
-              <div className="flex items-center justify-between px-1 pb-3 text-[11px] tracking-widest text-(--pm-dark-secondary)"><span>01 / FACTURA</span><span>{customInvName ? "1 archivo" : "Sin archivo"}</span></div>
-              <DropZone inputId="hub-invoice-file" title="Factura comercial" hint="Arrastra tu archivo aquí" loadedLabel={customInvName} onFile={(f) => void handleHubFile(f, "invoice")} icon={<FileText className="w-5 h-5" aria-hidden="true" />} />
+            <section aria-label={dict.landing.invoiceAria} className="rounded-2xl border border-(--pm-dark-border) bg-(--pm-dark-surface) p-4">
+              <div className="flex items-center justify-between px-1 pb-3 text-[11px] tracking-widest text-(--pm-dark-secondary)"><span>{dict.landing.invoiceEyebrow}</span><span>{customInvName ? dict.landing.oneFile : dict.landing.noFile}</span></div>
+              <DropZone inputId="hub-invoice-file" title={dict.landing.dropInvoiceTitle} hint={dict.landing.dropHint} loadedLabel={customInvName} onFile={(f) => void handleHubFile(f, "invoice")} icon={<FileText className="w-5 h-5" aria-hidden="true" />} />
             </section>
             <div className="flex lg:flex-col items-center justify-center gap-4 px-2 text-center">
               <span className="hidden lg:block text-(--pm-sage) text-3xl font-light" aria-hidden="true">==</span>
               <div>
-                <p className="text-xl font-bold leading-tight">Un mismo<br />embarque.</p>
-                <p className="mt-2 text-sm text-(--pm-dark-secondary) max-w-[180px]">Agrega ambos documentos para iniciar la comparación.</p>
+                <p className="text-xl font-bold leading-tight">{dict.landing.sameShipment}</p>
+                <p className="mt-2 text-sm text-(--pm-dark-secondary) max-w-[180px]">{dict.landing.sameShipmentHint}</p>
                 <button type="button" disabled={!customInvDataUrl || !customPlDataUrl || isExtractingLive} onClick={() => customInvDataUrl && customPlDataUrl && void handleRunLiveExtraction(customInvDataUrl, customPlDataUrl)} className="btn-press mt-4 inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-sage) text-(--pm-ink) font-bold text-sm disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed">
-                  {isExtractingLive ? "Analizando documentos…" : <>Conciliar <ArrowRight className="w-4 h-4" aria-hidden="true" /></>}
+                  {isExtractingLive ? dict.landing.analyzing : <>{dict.landing.reconcile} <ArrowRight className="w-4 h-4" aria-hidden="true" /></>}
                 </button>
-                <p className="mt-2 text-xs text-(--pm-dark-secondary)">{(customInvDataUrl ? 1 : 0) + (customPlDataUrl ? 1 : 0)} de 2 archivos</p>
+                <p className="mt-2 text-xs text-(--pm-dark-secondary)">{formatTemplate(dict.landing.filesOfTwo, { count: (customInvDataUrl ? 1 : 0) + (customPlDataUrl ? 1 : 0) })}</p>
               </div>
             </div>
-            <section aria-label="Lista de empaque" className="rounded-2xl border border-(--pm-dark-border) bg-(--pm-dark-surface) p-4">
-              <div className="flex items-center justify-between px-1 pb-3 text-[11px] tracking-widest text-(--pm-dark-secondary)"><span>02 / EMPAQUE</span><span>{customPlName ? "1 archivo" : "Sin archivo"}</span></div>
-              <DropZone inputId="hub-packing-file" title="Lista de empaque" hint="Arrastra tu archivo aquí" loadedLabel={customPlName} onFile={(f) => void handleHubFile(f, "packing")} icon={<Package className="w-5 h-5" aria-hidden="true" />} />
+            <section aria-label={dict.landing.packingAria} className="rounded-2xl border border-(--pm-dark-border) bg-(--pm-dark-surface) p-4">
+              <div className="flex items-center justify-between px-1 pb-3 text-[11px] tracking-widest text-(--pm-dark-secondary)"><span>{dict.landing.packingEyebrow}</span><span>{customPlName ? dict.landing.oneFile : dict.landing.noFile}</span></div>
+              <DropZone inputId="hub-packing-file" title={dict.landing.dropPackingTitle} hint={dict.landing.dropHint} loadedLabel={customPlName} onFile={(f) => void handleHubFile(f, "packing")} icon={<Package className="w-5 h-5" aria-hidden="true" />} />
             </section>
           </div>
 
           <div className="mt-10 pt-6 border-t border-(--pm-dark-border) flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
-            <span className="text-(--pm-dark-secondary)">Otras formas de comenzar</span>
-            <button type="button" onClick={() => { setPasteError(null); setShowPasteModal(true); }} className="btn-press font-semibold text-(--pm-paper) hover:text-(--pm-sage) cursor-pointer">Excel / CSV <span aria-hidden="true">↗</span></button>
-            <button type="button" onClick={handleStartWithEmptyTables} className="btn-press font-semibold text-(--pm-paper) hover:text-(--pm-sage) cursor-pointer">Tablas en blanco <span aria-hidden="true">↗</span></button>
+            <span className="text-(--pm-dark-secondary)">{dict.landing.otherWays}</span>
+            <button type="button" onClick={() => { setPasteError(null); setShowPasteModal(true); }} className="btn-press font-semibold text-(--pm-paper) hover:text-(--pm-sage) cursor-pointer">{dict.landing.excelCsv} <span aria-hidden="true">↗</span></button>
+            <button type="button" onClick={handleStartWithEmptyTables} className="btn-press font-semibold text-(--pm-paper) hover:text-(--pm-sage) cursor-pointer">{dict.landing.blankTables} <span aria-hidden="true">↗</span></button>
             <label className="ml-auto inline-flex items-center gap-2">
-              <span className="sr-only">Probar un ejemplo</span>
-              <select aria-label="Probar un ejemplo" value="" onChange={(e) => { if (e.target.value) handleSelectCase(e.target.value); }} className="h-9 px-3 rounded-lg bg-(--pm-dark-surface) border border-(--pm-dark-border) text-(--pm-paper) text-sm font-semibold cursor-pointer">
-                <option value="" disabled>Probar un ejemplo →</option>
-                {PRELOADED_CASES.map((c) => { const h = humanLabelFor(c.case_id); return <option key={c.case_id} value={c.case_id}>{h.number} · {h.name}</option>; })}
+              <span className="sr-only">{dict.landing.tryExampleSr}</span>
+              <select aria-label={dict.landing.tryExampleSr} value="" onChange={(e) => { if (e.target.value) handleSelectCase(e.target.value); }} className="h-9 px-3 rounded-lg bg-(--pm-dark-surface) border border-(--pm-dark-border) text-(--pm-paper) text-sm font-semibold cursor-pointer">
+                <option value="" disabled>{dict.landing.tryExamplePlaceholder}</option>
+                {PRELOADED_CASES.map((c) => { const h = humanLabelFor(c.case_id, locale, dict.cases); return <option key={c.case_id} value={c.case_id}>{h.number} · {h.name}</option>; })}
               </select>
             </label>
           </div>
@@ -1189,27 +1031,27 @@ export default function PackMatchWorkbench() {
               <div>
                 {eyebrow && <p className="text-[11px] font-bold tracking-[0.18em] text-(--pm-primary)">{eyebrow}{shipmentMode === "demo" && demoHuman ? ` · ${demoHuman.name.toUpperCase()}` : ""}</p>}
                 <div className="flex flex-wrap items-center gap-3 mt-1">
-                  <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Diagnóstico y alertas</h1>
+                  <h1 className="text-3xl sm:text-4xl font-black tracking-tight">{dict.diagnosis.title}</h1>
                   <span className="hidden sm:block w-px h-8 bg-(--pm-border)" aria-hidden="true" />
                   {!hasData ? (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-border) bg-white text-sm font-bold text-(--pm-text-secondary)">Sin datos</span>
-                  ) : inputIssues.length > 0 ? (<span className="text-sm font-bold text-(--pm-warning-text)">Datos por corregir</span>) : findings.length === 0 ? (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-primary) bg-(--pm-selection) text-sm font-bold text-(--pm-primary)"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Sin diferencias detectadas</span>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-border) bg-white text-sm font-bold text-(--pm-text-secondary)">{dict.diagnosis.badgeNoData}</span>
+                  ) : inputIssues.length > 0 ? (<span className="text-sm font-bold text-(--pm-warning-text)">{dict.diagnosis.badgeFixData}</span>) : findings.length === 0 ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-primary) bg-(--pm-selection) text-sm font-bold text-(--pm-primary)"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> {dict.diagnosis.badgeNoDiff}</span>
                   ) : ambiguitiesCount > 0 && discrepanciesCount === 0 ? (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-warning-border) bg-(--pm-warning-bg) text-sm font-bold text-(--pm-warning-text)"><HelpCircle className="w-4 h-4" aria-hidden="true" /> Equivalencia pendiente</span>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-warning-border) bg-(--pm-warning-bg) text-sm font-bold text-(--pm-warning-text)"><HelpCircle className="w-4 h-4" aria-hidden="true" /> {dict.diagnosis.badgePending}</span>
                   ) : (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> Requiere revisión</span>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {dict.diagnosis.badgeReview}</span>
                   )}
-                  <span className="text-sm text-(--pm-text-secondary)">{findings.length} hallazgo{findings.length === 1 ? "" : "s"}{ambiguitiesCount > 0 ? ` · ${ambiguitiesCount} duda${ambiguitiesCount === 1 ? "" : "s"} por confirmar` : ""}</span>
+                  <span className="text-sm text-(--pm-text-secondary)">{formatTemplate(dict.diagnosis.findingsCount, { count: findings.length, plural: pluralS(findings.length) })}{ambiguitiesCount > 0 ? formatTemplate(dict.diagnosis.doubtsCount, { count: ambiguitiesCount, plural: pluralS(ambiguitiesCount) }) : ""}</span>
                 </div>
-                <p className="mt-1 text-sm text-(--pm-text-secondary)">{!hasData ? "Agrega datos en el Paso 4 para comenzar el diagnóstico." : findings.length === 0 ? "Revisa el resultado de la conciliación entre la factura y la lista de empaque." : `De los ${totalSkus} productos de este envío, ${matchedSkus} cuadran en cantidades${discrepantSkus + ambiguousSkus > 0 ? ` y ${discrepantSkus + ambiguousSkus} requieren revisión antes de enviar los papeles a la Aduana.` : "."}`}</p>
+                <p className="mt-1 text-sm text-(--pm-text-secondary)">{!hasData ? dict.diagnosis.emptyHint : findings.length === 0 ? dict.diagnosis.reviewHint : formatTemplate(dict.diagnosis.shipmentHint, { total: totalSkus, matched: matchedSkus, rest: discrepantSkus + ambiguousSkus > 0 ? formatTemplate(dict.diagnosis.shipmentHintRest, { count: discrepantSkus + ambiguousSkus }) : "." })}</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {[
-                  { icon: <FileText className="w-5 h-5" aria-hidden="true" />, label: "Total facturado", value: `USD ${fmtCurrency.format(reconciliation.computedTotals.invoiceLinesSumAmount)}` },
-                  { icon: <Package className="w-5 h-5" aria-hidden="true" />, label: "Cajas físicas (bultos)", value: `${fmtNumber.format(reconciliation.computedTotals.packingCalculatedCartons)} cajas` },
-                  { icon: <Weight className="w-5 h-5" aria-hidden="true" />, label: "Peso total (neto / bruto)", value: `${fmtNumber.format(reconciliation.computedTotals.packingCalculatedNetKg)} / ${fmtNumber.format(reconciliation.computedTotals.packingCalculatedGrossKg)} kg` },
+                  { icon: <FileText className="w-5 h-5" aria-hidden="true" />, label: dict.diagnosis.metricInvoiced, value: `${currencyCode} ${fmtCurrency.format(reconciliation.computedTotals.invoiceLinesSumAmount)}` },
+                  { icon: <Package className="w-5 h-5" aria-hidden="true" />, label: dict.diagnosis.metricCartons, value: formatTemplate(dict.diagnosis.cartonsUnit, { count: fmtNumber.format(reconciliation.computedTotals.packingCalculatedCartons) }) },
+                  { icon: <Weight className="w-5 h-5" aria-hidden="true" />, label: dict.diagnosis.metricWeight, value: formatTemplate(dict.diagnosis.weightUnit, { net: fmtNumber.format(reconciliation.computedTotals.packingCalculatedNetKg), gross: fmtNumber.format(reconciliation.computedTotals.packingCalculatedGrossKg) }) },
                 ].map((m) => (
                   <div key={m.label} className="bg-white rounded-2xl border border-(--pm-border) px-5 py-4 flex items-center gap-4">
                     <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-(--pm-selection) text-(--pm-primary) shrink-0">{m.icon}</span>
@@ -1220,19 +1062,19 @@ export default function PackMatchWorkbench() {
 
               {!hasData ? (
                 <div className="bg-white rounded-2xl border border-(--pm-border) p-8 text-center">
-                  <p className="font-bold">Sin datos</p>
-                  <p className="text-sm text-(--pm-text-secondary) mt-1">Todavía no hay datos que diagnosticar. Agrega renglones en la captura manual y vuelve aquí para ver el veredicto al instante.</p>
-                  <button type="button" onClick={() => { setShowEditableTables(true); goToStep(4); }} className="btn-press mt-4 px-5 py-2.5 rounded-lg bg-(--pm-primary) text-white text-sm font-bold cursor-pointer">Ir a captura manual</button>
+                  <p className="font-bold">{dict.diagnosis.noDataTitle}</p>
+                  <p className="text-sm text-(--pm-text-secondary) mt-1">{dict.diagnosis.noDataBody}</p>
+                  <button type="button" onClick={() => { setShowEditableTables(true); goToStep(4); }} className="btn-press mt-4 px-5 py-2.5 rounded-lg bg-(--pm-primary) text-white text-sm font-bold cursor-pointer">{dict.diagnosis.goToCapture}</button>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-5 items-start">
-                  <section aria-label="Hallazgos" className="bg-white rounded-2xl border border-(--pm-border) p-5">
-                    <h2 className="text-lg font-bold">Hallazgos · {findings.length}</h2>
+                  <section aria-label={formatTemplate(dict.diagnosis.findingsTitle, { count: findings.length })} className="bg-white rounded-2xl border border-(--pm-border) p-5">
+                    <h2 className="text-lg font-bold">{formatTemplate(dict.diagnosis.findingsTitle, { count: findings.length })}</h2>
                     {findings.length === 0 ? (
                       <div className="mt-4">
-                        <div className="rounded-xl border border-(--pm-primary) bg-(--pm-selection) p-4 flex gap-3"><CheckCircle2 className="w-6 h-6 text-(--pm-primary) shrink-0" aria-hidden="true" /><span><strong className="block">No se detectaron hallazgos.</strong><span className="text-sm text-(--pm-text-secondary)">Las cantidades de ambos documentos coinciden.</span></span></div>
+                        <div className="rounded-xl border border-(--pm-primary) bg-(--pm-selection) p-4 flex gap-3"><CheckCircle2 className="w-6 h-6 text-(--pm-primary) shrink-0" aria-hidden="true" /><span><strong className="block">{dict.diagnosis.noFindingsTitle}</strong><span className="text-sm text-(--pm-text-secondary)">{dict.diagnosis.noFindingsBody}</span></span></div>
                         <ul className="mt-4 divide-y divide-(--pm-border) text-sm">
-                          {[["Diferencias de cantidad", discrepantSkus], ["Productos sin correspondencia", findings.length], ["Cajas / empaque", 0], ["Peso", 0]].map(([l, v]) => (
+                          {[[dict.diagnosis.findingRowNoData[0], discrepantSkus], [dict.diagnosis.findingRowNoData[1], findings.length], [dict.diagnosis.findingRowNoData[2], 0], [dict.diagnosis.findingRowNoData[3], 0]].map(([l, v]) => (
                             <li key={String(l)} className="flex items-center justify-between py-2.5"><span className="inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-(--pm-primary)" aria-hidden="true" /> {l}</span><span className="font-bold">{v}</span></li>
                           ))}
                         </ul>
@@ -1240,7 +1082,7 @@ export default function PackMatchWorkbench() {
                     ) : (
                       <ul className="mt-4 flex flex-col gap-3">
                         {findings.map((f, idx) => {
-                          const human = describeFindingInPlainSpanish(f, invoice, packingList, reconciliation.skuSummaries);
+                          const human = describeFinding(f, invoice, packingList, reconciliation.skuSummaries, locale);
                           const isSel = idx === selIdx;
                           const isDisc = f.severity === "DISCREPANCY";
                           return (
@@ -1248,7 +1090,7 @@ export default function PackMatchWorkbench() {
                               <button type="button" aria-pressed={isSel} onClick={() => { setSelectedFindingIdx(idx); setHighlightedOrigins(f.origins); }} className={`btn-press w-full text-left p-4 rounded-xl border cursor-pointer ${isSel ? "border-(--pm-primary) bg-(--pm-selection)" : "border-(--pm-border) bg-white hover:bg-(--pm-paper)"}`}>
                                 <span className="flex items-start gap-2.5">
                                   {isDisc ? <AlertCircle className="w-5 h-5 text-(--pm-error) shrink-0 mt-0.5" aria-hidden="true" /> : <HelpCircle className="w-5 h-5 text-(--pm-warning-text) shrink-0 mt-0.5" aria-hidden="true" />}
-                                  <span className="min-w-0"><span className="block text-sm font-bold leading-snug"><span className="text-(--pm-text-secondary) mr-1.5">{String(idx + 1).padStart(2, "0")}</span>{shortFindingTitle(f, invoice, reconciliation.skuSummaries)}</span>
+                                  <span className="min-w-0"><span className="block text-sm font-bold leading-snug"><span className="text-(--pm-text-secondary) mr-1.5">{String(idx + 1).padStart(2, "0")}</span>{shortFindingTitle(f, invoice, reconciliation.skuSummaries, locale)}</span>
                                   <span className="block text-xs text-(--pm-text-secondary) mt-1 leading-relaxed">{human.explanation}</span></span>
                                 </span>
                               </button>
@@ -1259,20 +1101,20 @@ export default function PackMatchWorkbench() {
                     )}
                   </section>
 
-                  <section aria-label="Detalle del hallazgo" className="bg-white rounded-2xl border border-(--pm-border) p-5 sm:p-6">
+                  <section aria-label={dict.diagnosis.title} className="bg-white rounded-2xl border border-(--pm-border) p-5 sm:p-6">
                     {findings.length === 0 ? (
                       <>
-                        <div className="flex items-start gap-3"><CheckCircle2 className="w-8 h-8 text-(--pm-primary) shrink-0" aria-hidden="true" /><h2 className="text-2xl font-black leading-tight">Las cantidades de ambos documentos coinciden.</h2></div>
+                        <div className="flex items-start gap-3"><CheckCircle2 className="w-8 h-8 text-(--pm-primary) shrink-0" aria-hidden="true" /><h2 className="text-2xl font-black leading-tight">{dict.diagnosis.matchTitle}</h2></div>
                         <div className="flex flex-wrap gap-2 mt-4">
-                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-paper) border border-(--pm-border)"><FileText className="w-3.5 h-3.5" aria-hidden="true" /> Factura: <strong>{invoice.invoice_no}</strong></span>
+                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-paper) border border-(--pm-border)"><FileText className="w-3.5 h-3.5" aria-hidden="true" /> {dict.diagnosis.invoiceLabel}: <strong>{invoice.invoice_no}</strong></span>
                           <span className="text-(--pm-text-secondary)">/</span>
-                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-paper) border border-(--pm-border)"><Package className="w-3.5 h-3.5" aria-hidden="true" /> Lista de empaque: <strong>{packingList.packing_list_no}</strong></span>
+                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-paper) border border-(--pm-border)"><Package className="w-3.5 h-3.5" aria-hidden="true" /> {dict.diagnosis.packingLabel}: <strong>{packingList.packing_list_no}</strong></span>
                         </div>
                         {reconciliation.skuSummaries.length > 0 && (
                           <div className="mt-6">
-                            <h3 className="text-base font-bold mb-3">Comparación por producto</h3>
-                            <div className="overflow-x-auto rounded-xl border border-(--pm-border)"><table className="w-full text-sm min-w-[520px]"><thead><tr className="bg-(--pm-selection) text-left text-xs"><th scope="col" className="py-2.5 px-3">Producto</th><th scope="col" className="py-2.5 px-3">Cantidad en factura</th><th scope="col" className="py-2.5 px-3">Cantidad en empaque</th><th scope="col" className="py-2.5 px-3">Resultado</th></tr></thead>
-                            <tbody className="divide-y divide-(--pm-border)">{reconciliation.skuSummaries.map((sm) => (<tr key={sm.sku}><td className="py-2.5 px-3 font-bold">{sm.sku}</td><td className="py-2.5 px-3">{sm.invoiceQty !== null ? `${fmtNumber.format(sm.invoiceQty)} ${sm.invoiceUnit}` : "-"}{sm.conversionFactorUsed ? <span className="block text-xs text-(--pm-text-secondary)">(1 SET = {sm.conversionFactorUsed} PCS)</span> : null}</td><td className="py-2.5 px-3">{fmtNumber.format(sm.packingTotalQty)} {sm.packingUnit}</td><td className="py-2.5 px-3"><span className="inline-flex items-center gap-1 text-(--pm-primary) font-bold text-xs"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Coincide</span></td></tr>))}</tbody></table></div>
+                            <h3 className="text-base font-bold mb-3">{dict.diagnosis.compareByProduct}</h3>
+                            <div className="overflow-x-auto rounded-xl border border-(--pm-border)"><table className="w-full text-sm min-w-[520px]"><thead><tr className="bg-(--pm-selection) text-left text-xs"><th scope="col" className="py-2.5 px-3">{dict.diagnosis.colProduct}</th><th scope="col" className="py-2.5 px-3">{dict.diagnosis.colInvoiceQty}</th><th scope="col" className="py-2.5 px-3">{dict.diagnosis.colPackingQty}</th><th scope="col" className="py-2.5 px-3">{dict.diagnosis.colResult}</th></tr></thead>
+                            <tbody className="divide-y divide-(--pm-border)">{reconciliation.skuSummaries.map((sm) => (<tr key={sm.sku}><td className="py-2.5 px-3 font-bold">{sm.sku}</td><td className="py-2.5 px-3">{sm.invoiceQty !== null ? `${fmtNumber.format(sm.invoiceQty)} ${sm.invoiceUnit}` : "-"}{sm.conversionFactorUsed ? <span className="block text-xs text-(--pm-text-secondary)">(1 SET = {sm.conversionFactorUsed} PCS)</span> : null}</td><td className="py-2.5 px-3">{fmtNumber.format(sm.packingTotalQty)} {sm.packingUnit}</td><td className="py-2.5 px-3"><span className="inline-flex items-center gap-1 text-(--pm-primary) font-bold text-xs"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> {dict.diagnosis.matches}</span></td></tr>))}</tbody></table></div>
                           </div>
                         )}
                       </>
@@ -1280,20 +1122,20 @@ export default function PackMatchWorkbench() {
                       <>
                         <div className="flex items-start gap-3">
                           {selFinding.severity === "DISCREPANCY" ? <AlertCircle className="w-8 h-8 text-(--pm-error) shrink-0" aria-hidden="true" /> : <HelpCircle className="w-8 h-8 text-(--pm-warning-text) shrink-0" aria-hidden="true" />}
-                          <div><h2 className="text-2xl font-black leading-tight">{shortFindingTitle(selFinding, invoice, reconciliation.skuSummaries)}</h2>
+                          <div><h2 className="text-2xl font-black leading-tight">{shortFindingTitle(selFinding, invoice, reconciliation.skuSummaries, locale)}</h2>
                           {selInvLine?.description && <p className="text-sm text-(--pm-text-secondary) mt-0.5">{selInvLine.description}</p>}</div>
                         </div>
-                        <div className="flex flex-wrap gap-2 mt-4">{selHuman.locationPills.map((pill, i) => (<span key={`${pill}-${i}`} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-paper) border border-(--pm-border)">{pill.includes("Empaque") || pill.includes("Lista") ? <Package className="w-3.5 h-3.5" aria-hidden="true" /> : <FileText className="w-3.5 h-3.5" aria-hidden="true" />} {pill}</span>))}</div>
+                        <div className="flex flex-wrap gap-2 mt-4">{selFinding.origins.map((origin, i) => (<span key={`${origin}-${i}`} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-paper) border border-(--pm-border)">{origin.startsWith("PL") ? <Package className="w-3.5 h-3.5" aria-hidden="true" /> : <FileText className="w-3.5 h-3.5" aria-hidden="true" />} {formatOriginLabel(origin, locale)}</span>))}</div>
                         <p className="mt-4 text-sm leading-relaxed">{selHuman.explanation}</p>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5">
                           {selFinding.code === "INVOICE_LINE_MATH_ERROR" && selInvLine ? (<>
-                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">Declarado</span><strong className="text-xl">USD {fmtCurrency.format(selInvLine.line_amount)}</strong></div>
-                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">Correcto</span><strong className="text-xl">USD {fmtCurrency.format(selInvLine.qty * selInvLine.unit_price)}</strong></div>
-                            <div className="rounded-xl border border-(--pm-border) p-4 flex items-center text-sm font-semibold">{fmtNumber.format(selInvLine.qty)} × USD {fmtCurrency.format(selInvLine.unit_price)} = USD {fmtCurrency.format(selInvLine.qty * selInvLine.unit_price)}</div>
+                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">{dict.diagnosis.declared}</span><strong className="text-xl">{currencyCode} {fmtCurrency.format(selInvLine.line_amount)}</strong></div>
+                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">{dict.diagnosis.correct}</span><strong className="text-xl">{currencyCode} {fmtCurrency.format(selInvLine.qty * selInvLine.unit_price)}</strong></div>
+                            <div className="rounded-xl border border-(--pm-border) p-4 flex items-center text-sm font-semibold">{fmtNumber.format(selInvLine.qty)} × {currencyCode} {fmtCurrency.format(selInvLine.unit_price)} = {currencyCode} {fmtCurrency.format(selInvLine.qty * selInvLine.unit_price)}</div>
                           </>) : selSum ? (<>
-                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">Factura{selSum.conversionFactorUsed ? ` (1 SET = ${selSum.conversionFactorUsed} PCS)` : ""}</span><strong className="text-xl">{selSum.invoiceQty !== null ? `${fmtNumber.format(selComparable?.invoiceQty ?? selSum.invoiceQty)} ${selComparable?.unit ?? selSum.invoiceUnit}` : "No figura"}</strong></div>
-                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">Empaque (suma de filas)</span><strong className="text-xl">{fmtNumber.format(selSum.packingTotalQty)} {selSum.packingUnit}</strong></div>
-                            {selComparable ? (<div className="rounded-xl border border-(--pm-error-border) bg-(--pm-error-bg) p-4"><span className="block text-sm text-(--pm-error)">Diferencia</span><strong className="text-xl text-(--pm-error)">{fmtNumber.format(selComparable.difference)} {selSum.packingUnit}</strong></div>) : (<div className="rounded-xl border border-(--pm-border) p-4 text-sm text-(--pm-text-secondary) flex items-center">Las unidades no son directamente comparables sin equivalencia confirmada.</div>)}
+                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">{selSum.conversionFactorUsed ? formatTemplate(dict.diagnosis.invoiceWithFactor, { factor: selSum.conversionFactorUsed }) : dict.diagnosis.invoicePlain}</span><strong className="text-xl">{selSum.invoiceQty !== null ? `${fmtNumber.format(selComparable?.invoiceQty ?? selSum.invoiceQty)} ${selComparable?.unit ?? selSum.invoiceUnit}` : dict.diagnosis.notListed}</strong></div>
+                            <div className="rounded-xl border border-(--pm-border) p-4"><span className="block text-sm text-(--pm-text-secondary)">{dict.diagnosis.packingSum}</span><strong className="text-xl">{fmtNumber.format(selSum.packingTotalQty)} {selSum.packingUnit}</strong></div>
+                            {selComparable ? (<div className="rounded-xl border border-(--pm-error-border) bg-(--pm-error-bg) p-4"><span className="block text-sm text-(--pm-error)">{dict.diagnosis.difference}</span><strong className="text-xl text-(--pm-error)">{fmtNumber.format(selComparable.difference)} {selSum.packingUnit}</strong></div>) : (<div className="rounded-xl border border-(--pm-border) p-4 text-sm text-(--pm-text-secondary) flex items-center">{dict.diagnosis.notComparable}</div>)}
                           </>) : null}
                         </div>
                         {selFinding.code === "UNIT_AMBIGUITY_UNCONVERTIBLE" && selSum && (() => {
@@ -1302,24 +1144,24 @@ export default function PackMatchWorkbench() {
                           const valid = draft.trim() !== "" && Number.isSafeInteger(factor) && factor > 0;
                           return (
                             <div className="mt-5 rounded-xl bg-(--pm-warning-bg) border border-(--pm-warning-border) px-4 py-3 flex flex-wrap items-center gap-3">
-                              <span className="text-sm font-bold">Confirma la equivalencia de unidades:</span>
-                              <span className="text-sm font-semibold">1 SET =</span>
-                              <input type="number" min={1} step={1} value={draft} aria-label={`Piezas por Set para ${selFinding.sku}`} placeholder="Ej. 4" className="w-20 px-2 py-1.5 bg-white border border-(--pm-warning-border) rounded-lg text-sm font-bold" onChange={(e) => setFactorDrafts((prev) => ({ ...prev, [selFinding.sku]: e.target.value }))} />
-                              <span className="text-sm font-semibold">PCS</span>
-                              <button type="button" disabled={!valid} onClick={() => { if (valid) setOperatorFactorBySku(selFinding.sku, factor); }} className="btn-press px-4 py-2 rounded-lg bg-(--pm-primary) text-white text-sm font-bold cursor-pointer">Confirmar equivalencia</button>
+                              <span className="text-sm font-bold">{dict.diagnosis.confirmFactor}</span>
+                              <span className="text-sm font-semibold">{dict.diagnosis.oneSetIs}</span>
+                              <input type="number" min={1} step={1} value={draft} aria-label={formatTemplate(dict.diagnosis.factorAria, { sku: selFinding.sku })} placeholder={dict.diagnosis.factorPlaceholder} className="w-20 px-2 py-1.5 bg-white border border-(--pm-warning-border) rounded-lg text-sm font-bold" onChange={(e) => setFactorDrafts((prev) => ({ ...prev, [selFinding.sku]: e.target.value }))} />
+                              <span className="text-sm font-semibold">{dict.diagnosis.pcs}</span>
+                              <button type="button" disabled={!valid} onClick={() => { if (valid) setOperatorFactorBySku(selFinding.sku, factor); }} className="btn-press px-4 py-2 rounded-lg bg-(--pm-primary) text-white text-sm font-bold cursor-pointer">{dict.diagnosis.confirmEquivalence}</button>
                             </div>
                           );
                         })()}
                         <div className="flex flex-wrap items-center justify-between gap-3 mt-6">
-                          <span className="text-sm text-(--pm-text-secondary)">Origen de la evidencia: {selFinding.origins.map(formatOriginLabel).join("  /  ")}</span>
-                          <button type="button" onClick={() => { setHighlightedOrigins(selFinding.origins); setFocusFindingIdx(selIdx); goToStep(2); }} className="btn-press inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">Ver evidencia <ArrowRight className="w-4 h-4" aria-hidden="true" /></button>
+                          <span className="text-sm text-(--pm-text-secondary)">{formatTemplate(dict.diagnosis.evidenceOrigin, { origins: selFinding.origins.map((o) => formatOriginLabel(o, locale)).join("  /  ") })}</span>
+                          <button type="button" onClick={() => { setHighlightedOrigins(selFinding.origins); setFocusFindingIdx(selIdx); goToStep(2); }} className="btn-press inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">{dict.diagnosis.viewEvidence} <ArrowRight className="w-4 h-4" aria-hidden="true" /></button>
                         </div>
                       </>
                     ) : null}
                   </section>
                 </div>
               )}
-              {hasData && (<div className="flex justify-end"><button type="button" onClick={() => goToStep(2)} className="btn-press inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">Inspeccionar documentos <ArrowRight className="w-4 h-4" aria-hidden="true" /></button></div>)}
+              {hasData && (<div className="flex justify-end"><button type="button" onClick={() => goToStep(2)} className="btn-press inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">{dict.diagnosis.inspectDocuments} <ArrowRight className="w-4 h-4" aria-hidden="true" /></button></div>)}
             </>
           )}
 
@@ -1328,55 +1170,55 @@ export default function PackMatchWorkbench() {
               <div>
                 {eyebrow && <p className="text-[11px] font-bold tracking-[0.18em] text-(--pm-primary)">{eyebrow}</p>}
                 <div className="flex flex-wrap items-center gap-3 mt-1">
-                  <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Cotejo en documentos</h1>
+                  <h1 className="text-3xl sm:text-4xl font-black tracking-tight">{dict.documents.title}</h1>
                   <span className="hidden sm:block w-px h-8 bg-(--pm-border)" aria-hidden="true" />
-                  {focusFinding ? (<span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {shortFindingTitle(focusFinding, invoice, reconciliation.skuSummaries)}</span>) : findings.length > 0 ? (<span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> Requiere revisión</span>) : (<span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-primary) bg-(--pm-selection) text-sm font-bold text-(--pm-primary)"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Sin diferencias</span>)}
-                  <span className="text-sm text-(--pm-text-secondary)">{findings.length} hallazgos en total</span>
+                  {focusFinding ? (<span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {shortFindingTitle(focusFinding, invoice, reconciliation.skuSummaries, locale)}</span>) : findings.length > 0 ? (<span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {dict.documents.badgeReview}</span>) : (<span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-primary) bg-(--pm-selection) text-sm font-bold text-(--pm-primary)"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> {dict.documents.badgeNoDiff}</span>)}
+                  <span className="text-sm text-(--pm-text-secondary)">{formatTemplate(dict.documents.findingsTotal, { count: findings.length })}</span>
                 </div>
-                <p className="mt-1 text-sm text-(--pm-text-secondary)">Compara la Factura y la Lista de Empaque para validar cantidades, montos y datos clave.</p>
+                <p className="mt-1 text-sm text-(--pm-text-secondary)">{dict.documents.hint}</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <label htmlFor="focus-finding" className="text-sm font-bold">Inspeccionando:</label>
+                <label htmlFor="focus-finding" className="text-sm font-bold">{dict.documents.inspecting}</label>
                 <select id="focus-finding" value={typeof focusFindingIdx === "number" && focusFindingIdx < findings.length ? String(focusFindingIdx) : "all"} onChange={(e) => { const v = e.target.value; if (v === "all") { setFocusFindingIdx("all"); setHighlightedOrigins(findings.flatMap((x) => x.origins)); } else { const i = Number(v); setFocusFindingIdx(i); setSelectedFindingIdx(i); const f = findings[i]; if (f) setHighlightedOrigins(f.origins); } }} className="h-10 px-3 rounded-lg bg-white border border-(--pm-border) text-sm font-medium cursor-pointer max-w-full">
-                  <option value="all">Todas las marcas</option>
-                  {findings.map((f, i) => (<option key={`${f.code}-${f.sku}-${i}`} value={String(i)}>Problema {i + 1}: {f.sku} ({shortFindingLabel(f.code)})</option>))}
+                  <option value="all">{dict.documents.allMarks}</option>
+                  {findings.map((f, i) => (<option key={`${f.code}-${f.sku}-${i}`} value={String(i)}>{formatTemplate(dict.documents.problemOption, { index: i + 1, sku: f.sku, label: shortFindingLabel(f.code, locale) })}</option>))}
                 </select>
-                <button type="button" onClick={() => { setFocusFindingIdx("all"); setHighlightedOrigins(findings.flatMap((x) => x.origins)); }} className="btn-press h-10 px-4 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer">Mostrar todas las marcas</button>
+                <button type="button" onClick={() => { setFocusFindingIdx("all"); setHighlightedOrigins(findings.flatMap((x) => x.origins)); }} className="btn-press h-10 px-4 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer">{dict.documents.showAll}</button>
                 {highlightedOrigins.length > 0 && (<>
-                  <span className="text-sm text-(--pm-text-secondary)">Origen del hallazgo:</span>
-                  {highlightedOrigins.map((o) => (<span key={o} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-selection) border border-(--pm-border)">{o.startsWith("PL") ? <Package className="w-3.5 h-3.5" aria-hidden="true" /> : <FileText className="w-3.5 h-3.5" aria-hidden="true" />} {formatOriginLabel(o)}</span>))}
-                  <button type="button" onClick={() => setHighlightedOrigins([])} className="btn-press inline-flex items-center gap-1.5 h-10 px-4 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><X className="w-4 h-4" aria-hidden="true" /> Limpiar selección</button>
+                  <span className="text-sm text-(--pm-text-secondary)">{dict.documents.findingOrigin}</span>
+                  {highlightedOrigins.map((o) => (<span key={o} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-(--pm-selection) border border-(--pm-border)">{o.startsWith("PL") ? <Package className="w-3.5 h-3.5" aria-hidden="true" /> : <FileText className="w-3.5 h-3.5" aria-hidden="true" />} {formatOriginLabel(o, locale)}</span>))}
+                  <button type="button" onClick={() => setHighlightedOrigins([])} className="btn-press inline-flex items-center gap-1.5 h-10 px-4 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><X className="w-4 h-4" aria-hidden="true" /> {dict.documents.clearSelection}</button>
                 </>)}
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-                <section aria-label="Factura comercial" className="bg-white rounded-2xl border border-(--pm-border) p-4">
+                <section aria-label={dict.landing.invoiceAria} className="bg-white rounded-2xl border border-(--pm-border) p-4">
                   <div className="flex items-center justify-between gap-2 mb-3">
-                    <div><p className="text-[11px] font-bold tracking-widest text-(--pm-primary)"><span className="inline-block h-2 w-2 rounded-full bg-(--pm-sage) mr-1.5" aria-hidden="true" />DOCUMENTO 1 · FACTURA</p><h2 className="text-base font-bold">Factura Comercial ({invoice.invoice_no})</h2></div>
-                    {invoiceImgUrl.startsWith("/cases/") && <a href={invoiceImgUrl.replace(".png", ".pdf")} target="_blank" rel="noreferrer" className="btn-press inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">Abrir PDF <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /></a>}
+                    <div><p className="text-[11px] font-bold tracking-widest text-(--pm-primary)"><span className="inline-block h-2 w-2 rounded-full bg-(--pm-sage) mr-1.5" aria-hidden="true" />{dict.documents.doc1}</p><h2 className="text-base font-bold">{formatTemplate(dict.documents.invoiceDoc, { no: invoice.invoice_no })}</h2></div>
+                    {invoiceImgUrl.startsWith("/cases/") && <a href={invoiceImgUrl.replace(".png", ".pdf")} target="_blank" rel="noreferrer" className="btn-press inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">{dict.documents.openPdf} <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /></a>}
                   </div>
                   {invoiceImgUrl ? (
                     <div className="relative w-full overflow-hidden rounded-lg border border-(--pm-border) bg-white">
-                      <img src={invoiceImgUrl} alt={`Factura Comercial ${invoice.invoice_no}`} className="w-full block select-none" />
-                      {invoice.header_bbox && (<div role="button" tabIndex={0} aria-label="Resaltar cabecera de totales en la Factura" onClick={() => setHighlightedOrigins(["INV-HEADER"])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins(["INV-HEADER"]); } }} style={{ top: `${invoice.header_bbox[0] / 10}%`, left: `${invoice.header_bbox[1] / 10}%`, height: `${(invoice.header_bbox[2] - invoice.header_bbox[0]) / 10}%`, width: `${(invoice.header_bbox[3] - invoice.header_bbox[1]) / 10}%` }} title="Totales declarados en la Factura" className={`absolute cursor-pointer rounded-sm ${highlightedOrigins.includes("INV-HEADER") ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}`}>{highlightedOrigins.includes("INV-HEADER") && <span className="absolute -top-5 left-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">Totales de Factura</span>}</div>)}
-                      {invoice.lines.map((line, idx) => { if (!line.bbox) return null; const [ymin, xmin, ymax, xmax] = line.bbox; const active = highlightedOrigins.includes(line.line_id); const summary = reconciliation.skuSummaries.find((sm) => sm.invoiceLineId === line.line_id); return (<div role="button" tabIndex={0} aria-label={`Factura Línea ${idx + 1}: ${line.sku}`} key={`bbox-${line.line_id}`} onClick={() => setHighlightedOrigins([line.line_id, ...(summary?.packingRowIds || [])])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins([line.line_id, ...(summary?.packingRowIds || [])]); } }} style={{ top: `${ymin / 10}%`, left: `${xmin / 10}%`, height: `${(ymax - ymin) / 10}%`, width: `${(xmax - xmin) / 10}%` }} title={line.bbox_estimated ? `Factura Línea ${idx + 1} · ${line.sku} (${line.qty} ${line.unit}) — posición estimada` : `Factura Línea ${idx + 1} · ${line.sku} (${line.qty} ${line.unit})`} className={`absolute cursor-pointer rounded-sm ${active ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}${line.bbox_estimated ? " border border-dashed border-(--pm-primary)/60 opacity-70" : ""}`}>{active && <span className="absolute -top-5 right-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap max-w-[220px] truncate">Línea {idx + 1}: {line.sku} ({line.qty} {line.unit})</span>}</div>); })}
+                      <img src={invoiceImgUrl} alt={formatTemplate(dict.documents.invoiceAlt, { no: invoice.invoice_no })} className="w-full block select-none" />
+                      {invoice.header_bbox && (<div role="button" tabIndex={0} aria-label={dict.documents.highlightInvoiceHeader} onClick={() => setHighlightedOrigins(["INV-HEADER"])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins(["INV-HEADER"]); } }} style={{ top: `${invoice.header_bbox[0] / 10}%`, left: `${invoice.header_bbox[1] / 10}%`, height: `${(invoice.header_bbox[2] - invoice.header_bbox[0]) / 10}%`, width: `${(invoice.header_bbox[3] - invoice.header_bbox[1]) / 10}%` }} title={dict.documents.invoiceTotalsTitle} className={`absolute cursor-pointer rounded-sm ${highlightedOrigins.includes("INV-HEADER") ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}`}>{highlightedOrigins.includes("INV-HEADER") && <span className="absolute -top-5 left-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">{dict.documents.invoiceTotalsBadge}</span>}</div>)}
+                      {invoice.lines.map((line, idx) => { if (!line.bbox) return null; const [ymin, xmin, ymax, xmax] = line.bbox; const active = highlightedOrigins.includes(line.line_id); const summary = reconciliation.skuSummaries.find((sm) => sm.invoiceLineId === line.line_id); return (<div role="button" tabIndex={0} aria-label={formatTemplate(dict.documents.invoiceLineAria, { index: idx + 1, sku: line.sku })} key={`bbox-${line.line_id}`} onClick={() => setHighlightedOrigins([line.line_id, ...(summary?.packingRowIds || [])])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins([line.line_id, ...(summary?.packingRowIds || [])]); } }} style={{ top: `${ymin / 10}%`, left: `${xmin / 10}%`, height: `${(ymax - ymin) / 10}%`, width: `${(xmax - xmin) / 10}%` }} title={`${formatTemplate(dict.documents.invoiceLineTitle, { index: idx + 1, sku: line.sku, qty: line.qty, unit: line.unit })}${line.bbox_estimated ? dict.documents.estimatedSuffix : ""}`} className={`absolute cursor-pointer rounded-sm ${active ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}${line.bbox_estimated ? " border border-dashed border-(--pm-primary)/60 opacity-70" : ""}`}>{active && <span className="absolute -top-5 right-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap max-w-[220px] truncate">{formatTemplate(dict.documents.lineBadge, { index: idx + 1, sku: line.sku, qty: line.qty, unit: line.unit })}</span>}</div>); })}
                     </div>
-                  ) : (<div className="rounded-lg border border-dashed border-(--pm-border) bg-(--pm-paper) px-4 py-10 text-center"><p className="text-sm font-semibold">Sin imagen de factura en este embarque</p><p className="text-xs text-(--pm-text-secondary) mt-1">Los datos capturados a mano o pegados desde Excel se concilian igual, sin necesidad de imagen.</p></div>)}
+                  ) : (<div className="rounded-lg border border-dashed border-(--pm-border) bg-(--pm-paper) px-4 py-10 text-center"><p className="text-sm font-semibold">{dict.documents.noInvoiceImage}</p><p className="text-xs text-(--pm-text-secondary) mt-1">{dict.documents.noImageHint}</p></div>)}
                 </section>
 
-                <section aria-label="Lista de empaque" className="bg-white rounded-2xl border border-(--pm-border) p-4">
+                <section aria-label={dict.landing.packingAria} className="bg-white rounded-2xl border border-(--pm-border) p-4">
                   <div className="flex items-center justify-between gap-2 mb-3">
-                    <div><p className="text-[11px] font-bold tracking-widest text-(--pm-primary)"><span className="inline-block h-2 w-2 rounded-full bg-(--pm-primary) mr-1.5" aria-hidden="true" />DOCUMENTO 2 · LISTA DE EMPAQUE</p><h2 className="text-base font-bold">Lista de Empaque ({packingList.packing_list_no})</h2></div>
-                    {packingImgUrl.startsWith("/cases/") && <a href={packingImgUrl.replace(".png", ".pdf")} target="_blank" rel="noreferrer" className="btn-press inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">Abrir PDF <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /></a>}
+                    <div><p className="text-[11px] font-bold tracking-widest text-(--pm-primary)"><span className="inline-block h-2 w-2 rounded-full bg-(--pm-primary) mr-1.5" aria-hidden="true" />{dict.documents.doc2}</p><h2 className="text-base font-bold">{formatTemplate(dict.documents.packingDoc, { no: packingList.packing_list_no })}</h2></div>
+                    {packingImgUrl.startsWith("/cases/") && <a href={packingImgUrl.replace(".png", ".pdf")} target="_blank" rel="noreferrer" className="btn-press inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">{dict.documents.openPdf} <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /></a>}
                   </div>
                   {packingImgUrl ? (
                     <div className="relative w-full overflow-hidden rounded-lg border border-(--pm-border) bg-white">
-                      <img src={packingImgUrl} alt={`Lista de Empaque ${packingList.packing_list_no}`} className="w-full block select-none" />
-                      {packingList.header_bbox && (<div role="button" tabIndex={0} aria-label="Resaltar cabecera de totales en la Lista de Empaque" onClick={() => setHighlightedOrigins(["PL-HEADER"])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins(["PL-HEADER"]); } }} style={{ top: `${packingList.header_bbox[0] / 10}%`, left: `${packingList.header_bbox[1] / 10}%`, height: `${(packingList.header_bbox[2] - packingList.header_bbox[0]) / 10}%`, width: `${(packingList.header_bbox[3] - packingList.header_bbox[1]) / 10}%` }} title="Totales declarados en la Lista de Empaque" className={`absolute cursor-pointer rounded-sm ${highlightedOrigins.includes("PL-HEADER") ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}`}>{highlightedOrigins.includes("PL-HEADER") && <span className="absolute -top-5 left-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">Totales de Lista de Empaque</span>}</div>)}
-                      {packingList.rows.map((row, idx) => { if (!row.bbox) return null; const [ymin, xmin, ymax, xmax] = row.bbox; const active = highlightedOrigins.includes(row.row_id); const summary = reconciliation.skuSummaries.find((sm) => sm.packingRowIds.includes(row.row_id)); return (<div role="button" tabIndex={0} aria-label={`Empaque Fila ${idx + 1}: ${row.sku}`} key={`bbox-${row.row_id}`} onClick={() => setHighlightedOrigins([...(summary?.invoiceLineId ? [summary.invoiceLineId] : []), ...(summary?.packingRowIds || [row.row_id])])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins([...(summary?.invoiceLineId ? [summary.invoiceLineId] : []), ...(summary?.packingRowIds || [row.row_id])]); } }} style={{ top: `${ymin / 10}%`, left: `${xmin / 10}%`, height: `${(ymax - ymin) / 10}%`, width: `${(xmax - xmin) / 10}%` }} title={row.bbox_estimated ? `Fila ${idx + 1} (${row.carton_range}) · ${row.sku}: ${row.total_qty} ${row.unit} — posición estimada` : `Fila ${idx + 1} (${row.carton_range}) · ${row.sku}: ${row.total_qty} ${row.unit}`} className={`absolute cursor-pointer rounded-sm ${active ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}${row.bbox_estimated ? " border border-dashed border-(--pm-primary)/60 opacity-70" : ""}`}>{active && <span className="absolute -top-5 left-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap max-w-[220px] truncate">Fila {idx + 1} ({row.carton_range}): {row.total_qty} {row.unit}</span>}</div>); })}
+                      <img src={packingImgUrl} alt={formatTemplate(dict.documents.packingAlt, { no: packingList.packing_list_no })} className="w-full block select-none" />
+                      {packingList.header_bbox && (<div role="button" tabIndex={0} aria-label={dict.documents.highlightPackingHeader} onClick={() => setHighlightedOrigins(["PL-HEADER"])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins(["PL-HEADER"]); } }} style={{ top: `${packingList.header_bbox[0] / 10}%`, left: `${packingList.header_bbox[1] / 10}%`, height: `${(packingList.header_bbox[2] - packingList.header_bbox[0]) / 10}%`, width: `${(packingList.header_bbox[3] - packingList.header_bbox[1]) / 10}%` }} title={dict.documents.packingTotalsTitle} className={`absolute cursor-pointer rounded-sm ${highlightedOrigins.includes("PL-HEADER") ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}`}>{highlightedOrigins.includes("PL-HEADER") && <span className="absolute -top-5 left-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">{dict.documents.packingTotalsBadge}</span>}</div>)}
+                      {packingList.rows.map((row, idx) => { if (!row.bbox) return null; const [ymin, xmin, ymax, xmax] = row.bbox; const active = highlightedOrigins.includes(row.row_id); const summary = reconciliation.skuSummaries.find((sm) => sm.packingRowIds.includes(row.row_id)); return (<div role="button" tabIndex={0} aria-label={formatTemplate(dict.documents.packingRowAria, { index: idx + 1, sku: row.sku })} key={`bbox-${row.row_id}`} onClick={() => setHighlightedOrigins([...(summary?.invoiceLineId ? [summary.invoiceLineId] : []), ...(summary?.packingRowIds || [row.row_id])])} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHighlightedOrigins([...(summary?.invoiceLineId ? [summary.invoiceLineId] : []), ...(summary?.packingRowIds || [row.row_id])]); } }} style={{ top: `${ymin / 10}%`, left: `${xmin / 10}%`, height: `${(ymax - ymin) / 10}%`, width: `${(xmax - xmin) / 10}%` }} title={`${formatTemplate(dict.documents.packingRowTitle, { index: idx + 1, range: row.carton_range, sku: row.sku, qty: row.total_qty, unit: row.unit })}${row.bbox_estimated ? dict.documents.estimatedSuffix : ""}`} className={`absolute cursor-pointer rounded-sm ${active ? "border-2 border-(--pm-error) bg-(--pm-highlight)/25 z-10" : "hover:bg-(--pm-primary)/10"}${row.bbox_estimated ? " border border-dashed border-(--pm-primary)/60 opacity-70" : ""}`}>{active && <span className="absolute -top-5 left-0 bg-(--pm-error) text-white text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap max-w-[220px] truncate">{formatTemplate(dict.documents.rowBadge, { index: idx + 1, range: row.carton_range, qty: row.total_qty, unit: row.unit })}</span>}</div>); })}
                     </div>
-                  ) : (<div className="rounded-lg border border-dashed border-(--pm-border) bg-(--pm-paper) px-4 py-10 text-center"><p className="text-sm font-semibold">Sin imagen de lista de empaque en este embarque</p><p className="text-xs text-(--pm-text-secondary) mt-1">Los datos capturados a mano o pegados desde Excel se concilian igual, sin necesidad de imagen.</p></div>)}
+                  ) : (<div className="rounded-lg border border-dashed border-(--pm-border) bg-(--pm-paper) px-4 py-10 text-center"><p className="text-sm font-semibold">{dict.documents.noPackingImage}</p><p className="text-xs text-(--pm-text-secondary) mt-1">{dict.documents.noImageHint}</p></div>)}
                 </section>
               </div>
 
@@ -1385,27 +1227,27 @@ export default function PackMatchWorkbench() {
                 const rows = packingList.rows.filter((r) => focusFinding.origins.includes(r.row_id));
                 if (!sm) return null;
                 return (
-                  <section aria-label="Comparación de unidades" className="bg-white rounded-2xl border border-(--pm-border) p-5 grid grid-cols-1 sm:grid-cols-4 gap-4 items-center">
-                    <div className="flex items-center gap-3"><span className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-(--pm-selection) text-(--pm-primary)"><Package className="w-5 h-5" aria-hidden="true" /></span><span><strong className="block">Comparación de unidades</strong><span className="text-sm text-(--pm-text-secondary)">{sm.sku}{selInvLine?.description ? ` · ${selInvLine.description}` : ""}</span></span></div>
-                    <div><span className="block text-sm text-(--pm-text-secondary)">Factura</span><strong className="text-2xl">{sm.invoiceQty !== null ? `${fmtNumber.format(sm.invoiceQty)} ${sm.invoiceUnit}` : "-"}</strong></div>
-                    <div><span className="block text-sm text-(--pm-text-secondary)">Empaque</span><strong className="text-2xl">{fmtNumber.format(sm.packingTotalQty)} {sm.packingUnit}</strong>{rows.length > 1 && <span className="block text-xs text-(--pm-text-secondary)">{rows.map((r) => fmtNumber.format(r.total_qty)).join(" + ")} = {fmtNumber.format(sm.packingTotalQty)}</span>}</div>
-                    <div className="rounded-xl bg-(--pm-error-bg) p-4"><span className="flex items-center gap-2 text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> Diferencia</span><strong className="text-2xl text-(--pm-error)">{sm.invoiceQty !== null ? `${fmtNumber.format(sm.packingTotalQty - sm.invoiceQty)} ${sm.packingUnit}` : "-"}</strong></div>
+                  <section aria-label={dict.documents.unitsTitle} className="bg-white rounded-2xl border border-(--pm-border) p-5 grid grid-cols-1 sm:grid-cols-4 gap-4 items-center">
+                    <div className="flex items-center gap-3"><span className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-(--pm-selection) text-(--pm-primary)"><Package className="w-5 h-5" aria-hidden="true" /></span><span><strong className="block">{dict.documents.unitsTitle}</strong><span className="text-sm text-(--pm-text-secondary)">{sm.sku}{selInvLine?.description ? ` · ${selInvLine.description}` : ""}</span></span></div>
+                    <div><span className="block text-sm text-(--pm-text-secondary)">{dict.documents.invoiceCol}</span><strong className="text-2xl">{sm.invoiceQty !== null ? `${fmtNumber.format(sm.invoiceQty)} ${sm.invoiceUnit}` : "-"}</strong></div>
+                    <div><span className="block text-sm text-(--pm-text-secondary)">{dict.documents.packingCol}</span><strong className="text-2xl">{fmtNumber.format(sm.packingTotalQty)} {sm.packingUnit}</strong>{rows.length > 1 && <span className="block text-xs text-(--pm-text-secondary)">{rows.map((r) => fmtNumber.format(r.total_qty)).join(" + ")} = {fmtNumber.format(sm.packingTotalQty)}</span>}</div>
+                    <div className="rounded-xl bg-(--pm-error-bg) p-4"><span className="flex items-center gap-2 text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {dict.documents.differenceCol}</span><strong className="text-2xl text-(--pm-error)">{sm.invoiceQty !== null ? `${fmtNumber.format(sm.packingTotalQty - sm.invoiceQty)} ${sm.packingUnit}` : "-"}</strong></div>
                   </section>
                 );
               })() : (
-                <section aria-label="Comparación del documento seleccionado" className="bg-white rounded-2xl border border-(--pm-border) p-5">
+                <section aria-label={dict.documents.selectedCompare} className="bg-white rounded-2xl border border-(--pm-border) p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                    <h2 className="text-lg font-bold">Comparación del documento seleccionado</h2>
-                    <div className="flex flex-wrap gap-4 text-sm"><span><span className="text-(--pm-text-secondary) block text-xs">Total facturado</span><strong>USD {fmtCurrency.format(reconciliation.computedTotals.invoiceLinesSumAmount)}</strong></span><span><span className="text-(--pm-text-secondary) block text-xs">Bultos</span><strong>{fmtNumber.format(reconciliation.computedTotals.packingCalculatedCartons)} cajas</strong></span><span><span className="text-(--pm-text-secondary) block text-xs">Peso neto / bruto</span><strong>{fmtNumber.format(reconciliation.computedTotals.packingCalculatedNetKg)} / {fmtNumber.format(reconciliation.computedTotals.packingCalculatedGrossKg)} kg</strong></span></div>
+                    <h2 className="text-lg font-bold">{dict.documents.selectedCompare}</h2>
+                    <div className="flex flex-wrap gap-4 text-sm"><span><span className="text-(--pm-text-secondary) block text-xs">{dict.documents.totalInvoiced}</span><strong>{currencyCode} {fmtCurrency.format(reconciliation.computedTotals.invoiceLinesSumAmount)}</strong></span><span><span className="text-(--pm-text-secondary) block text-xs">{dict.documents.cartons}</span><strong>{formatTemplate(dict.diagnosis.cartonsUnit, { count: fmtNumber.format(reconciliation.computedTotals.packingCalculatedCartons) })}</strong></span><span><span className="text-(--pm-text-secondary) block text-xs">{dict.documents.netGross}</span><strong>{formatTemplate(dict.diagnosis.weightUnit, { net: fmtNumber.format(reconciliation.computedTotals.packingCalculatedNetKg), gross: fmtNumber.format(reconciliation.computedTotals.packingCalculatedGrossKg) })}</strong></span></div>
                   </div>
-                  <div className="overflow-x-auto rounded-xl border border-(--pm-border)"><table className="w-full text-sm min-w-[760px]"><thead><tr className="bg-(--pm-selection) text-left text-xs"><th scope="col" className="py-2.5 px-3">Línea</th><th scope="col" className="py-2.5 px-3">SKU</th><th scope="col" className="py-2.5 px-3">Descripción</th><th scope="col" className="py-2.5 px-3">Cantidad</th><th scope="col" className="py-2.5 px-3">Precio unitario</th><th scope="col" className="py-2.5 px-3">Declarado (Factura)</th><th scope="col" className="py-2.5 px-3">Correcto</th><th scope="col" className="py-2.5 px-3">Estado</th></tr></thead>
-                  <tbody className="divide-y divide-(--pm-border)">{invoice.lines.map((line, idx) => { const correct = line.qty * line.unit_price; const ok = Math.abs(correct - line.line_amount) < 0.005; const active = highlightedOrigins.includes(line.line_id); return (<tr key={line.line_id} className={active && !ok ? "bg-(--pm-error-bg)" : ""}><td className="py-2.5 px-3">{idx + 1}</td><td className="py-2.5 px-3 font-bold">{line.sku}</td><td className="py-2.5 px-3">{line.description || "-"}</td><td className="py-2.5 px-3">{fmtNumber.format(line.qty)} {line.unit}</td><td className="py-2.5 px-3">USD {fmtCurrency.format(line.unit_price)}</td><td className="py-2.5 px-3">USD {fmtCurrency.format(line.line_amount)}</td><td className="py-2.5 px-3">USD {fmtCurrency.format(correct)}</td><td className="py-2.5 px-3">{ok ? <span className="inline-flex items-center gap-1 text-xs font-bold text-(--pm-primary)"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Importe correcto</span> : <span className="inline-flex items-center gap-1 text-xs font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> Importe incorrecto (cálculo)</span>}</td></tr>); })}{invoice.lines.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-(--pm-text-secondary)">Sin líneas de factura.</td></tr>}</tbody></table></div>
+                  <div className="overflow-x-auto rounded-xl border border-(--pm-border)"><table className="w-full text-sm min-w-[760px]"><thead><tr className="bg-(--pm-selection) text-left text-xs"><th scope="col" className="py-2.5 px-3">{dict.documents.colLine}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colSku}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colDescription}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colQty}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colUnitPrice}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colDeclared}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colCorrect}</th><th scope="col" className="py-2.5 px-3">{dict.documents.colStatus}</th></tr></thead>
+                  <tbody className="divide-y divide-(--pm-border)">{invoice.lines.map((line, idx) => { const correct = line.qty * line.unit_price; const ok = Math.abs(correct - line.line_amount) < 0.005; const active = highlightedOrigins.includes(line.line_id); return (<tr key={line.line_id} className={active && !ok ? "bg-(--pm-error-bg)" : ""}><td className="py-2.5 px-3">{idx + 1}</td><td className="py-2.5 px-3 font-bold">{line.sku}</td><td className="py-2.5 px-3">{line.description || "-"}</td><td className="py-2.5 px-3">{fmtNumber.format(line.qty)} {line.unit}</td><td className="py-2.5 px-3">{currencyCode} {fmtCurrency.format(line.unit_price)}</td><td className="py-2.5 px-3">{currencyCode} {fmtCurrency.format(line.line_amount)}</td><td className="py-2.5 px-3">{currencyCode} {fmtCurrency.format(correct)}</td><td className="py-2.5 px-3">{ok ? <span className="inline-flex items-center gap-1 text-xs font-bold text-(--pm-primary)"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> {dict.documents.amountOk}</span> : <span className="inline-flex items-center gap-1 text-xs font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {dict.documents.amountBad}</span>}</td></tr>); })}{invoice.lines.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-(--pm-text-secondary)">{dict.documents.noInvoiceLines}</td></tr>}</tbody></table></div>
                 </section>
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <button type="button" onClick={() => goToStep(1)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> Volver al diagnóstico</button>
-                <button type="button" onClick={() => goToStep(3)} className="btn-press inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">Continuar a la matriz <ArrowRight className="w-4 h-4" aria-hidden="true" /></button>
+                <button type="button" onClick={() => goToStep(1)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> {dict.documents.backToDiagnosis}</button>
+                <button type="button" onClick={() => goToStep(3)} className="btn-press inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">{dict.documents.goToMatrix} <ArrowRight className="w-4 h-4" aria-hidden="true" /></button>
               </div>
             </>
           )}
@@ -1415,31 +1257,31 @@ export default function PackMatchWorkbench() {
               <div>
                 {eyebrow && <p className="text-[11px] font-bold tracking-[0.18em] text-(--pm-primary)">{eyebrow}</p>}
                 <div className="flex flex-wrap items-center justify-between gap-3 mt-1">
-                  <div className="flex flex-wrap items-center gap-3"><h1 className="text-3xl sm:text-4xl font-black tracking-tight">Matriz por producto</h1>
-                  {findings.length > 0 && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> Requiere revisión</span>}</div>
-                  <div role="group" aria-label="Filtrar productos por estado" className="flex rounded-full border border-(--pm-border) bg-white overflow-hidden">
-                    {([["all", `Todos (${totalSkus})`], ["disc", `Solo discrepancias (${discrepantSkus + ambiguousSkus})`], ["match", `Solo conformes (${matchedSkus})`]] as const).map(([key, label]) => (
+                  <div className="flex flex-wrap items-center gap-3"><h1 className="text-3xl sm:text-4xl font-black tracking-tight">{dict.matrix.title}</h1>
+                  {findings.length > 0 && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {dict.matrix.badgeReview}</span>}</div>
+                  <div role="group" aria-label={dict.matrix.filterLabel} className="flex rounded-full border border-(--pm-border) bg-white overflow-hidden">
+                    {([["all", formatTemplate(dict.matrix.all, { count: totalSkus })], ["disc", formatTemplate(dict.matrix.disc, { count: discrepantSkus + ambiguousSkus })], ["match", formatTemplate(dict.matrix.match, { count: matchedSkus })]] as const).map(([key, label]) => (
                       <button key={key} type="button" aria-pressed={matrixFilter === key} onClick={() => setMatrixFilter(key)} className={`btn-press px-4 py-2 text-sm font-bold cursor-pointer ${matrixFilter === key ? "bg-(--pm-ink) text-white" : "text-(--pm-text-secondary) hover:bg-(--pm-selection)"}`}>{label}</button>
                     ))}
                   </div>
                 </div>
-                <p className="mt-1 text-sm text-(--pm-text-secondary)">Comparación de cantidades por producto entre la Factura y el Empaque.</p>
+                <p className="mt-1 text-sm text-(--pm-text-secondary)">{dict.matrix.hint}</p>
               </div>
 
               <div className="bg-white rounded-2xl border border-(--pm-border) px-5 py-4 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
-                <span className="inline-flex items-center gap-2"><Package className="w-5 h-5 text-(--pm-primary)" aria-hidden="true" /> Productos: <strong>{totalSkus}</strong></span>
+                <span className="inline-flex items-center gap-2"><Package className="w-5 h-5 text-(--pm-primary)" aria-hidden="true" /> {dict.matrix.products} <strong>{totalSkus}</strong></span>
                 <span className="hidden sm:block w-px h-6 bg-(--pm-border)" aria-hidden="true" />
-                <span className="inline-flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-(--pm-primary)" aria-hidden="true" /> Cantidad coincide: <strong>{matchedSkus}</strong></span>
+                <span className="inline-flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-(--pm-primary)" aria-hidden="true" /> {dict.matrix.matched} <strong>{matchedSkus}</strong></span>
                 <span className="hidden sm:block w-px h-6 bg-(--pm-border)" aria-hidden="true" />
-                <span className="inline-flex items-center gap-2"><AlertCircle className="w-5 h-5 text-(--pm-error)" aria-hidden="true" /> Con diferencia: <strong>{discrepantSkus + ambiguousSkus}</strong></span>
+                <span className="inline-flex items-center gap-2"><AlertCircle className="w-5 h-5 text-(--pm-error)" aria-hidden="true" /> {dict.matrix.diff} <strong>{discrepantSkus + ambiguousSkus}</strong></span>
               </div>
 
-              <section aria-label="Matriz comparativa por producto" className="bg-white rounded-2xl border border-(--pm-border) p-5">
-                <h2 className="text-lg font-bold mb-4">Comparativo por producto</h2>
+              <section aria-label={dict.matrix.compareTitle} className="bg-white rounded-2xl border border-(--pm-border) p-5">
+                <h2 className="text-lg font-bold mb-4">{dict.matrix.compareTitle}</h2>
                 <div className="overflow-x-auto rounded-xl border border-(--pm-border)">
                   <table className="w-full text-left text-sm min-w-[820px]">
-                    <caption className="sr-only">Resumen comparativo producto por producto entre Factura y Lista de Empaque</caption>
-                    <thead><tr className="bg-(--pm-selection) text-xs text-(--pm-ink)"><th scope="col" className="py-3 px-4">Producto / Origen</th><th scope="col" className="py-3 px-4">Descripción</th><th scope="col" className="py-3 px-4">Facturado (Factura)</th><th scope="col" className="py-3 px-4">Empacado (Empaque)</th><th scope="col" className="py-3 px-4">Diferencia</th><th scope="col" className="py-3 px-4">Estado de cantidad</th></tr></thead>
+                    <caption className="sr-only">{dict.matrix.caption}</caption>
+                    <thead><tr className="bg-(--pm-selection) text-xs text-(--pm-ink)"><th scope="col" className="py-3 px-4">{dict.matrix.colProduct}</th><th scope="col" className="py-3 px-4">{dict.matrix.colDescription}</th><th scope="col" className="py-3 px-4">{dict.matrix.colInvoiced}</th><th scope="col" className="py-3 px-4">{dict.matrix.colPacked}</th><th scope="col" className="py-3 px-4">{dict.matrix.colDiff}</th><th scope="col" className="py-3 px-4">{dict.matrix.colStatus}</th></tr></thead>
                     <tbody className="divide-y divide-(--pm-border)">
                       {reconciliation.skuSummaries.filter((sm) => matrixFilter === "all" ? true : matrixFilter === "match" ? sm.status === "MATCHED" : sm.status !== "MATCHED").map((sm) => {
                         const invLine = invoice.lines.find((l) => l.line_id === sm.invoiceLineId);
@@ -1449,26 +1291,26 @@ export default function PackMatchWorkbench() {
                         const otherFinding = sm.status === "MATCHED" ? findings.find((f) => f.sku === sm.sku) : undefined;
                         return (
                           <tr key={`${sm.sku}-${sm.invoiceLineId}`} onClick={() => setHighlightedOrigins([...(sm.invoiceLineId ? [sm.invoiceLineId] : []), ...sm.packingRowIds])} className={`cursor-pointer ${qtyDiff !== null && qtyDiff !== 0 ? "bg-(--pm-error-bg)/60" : ""} ${isHighlighted ? "bg-(--pm-selection)/60" : "hover:bg-(--pm-paper)"}`}>
-                            <td className="py-4 px-4"><span className="block font-black">{sm.sku}</span><span className="block text-xs text-(--pm-text-secondary) mt-0.5">{sm.invoiceLineId ? formatOriginLabel(sm.invoiceLineId) : "No está en la Factura"} ↔ {sm.packingRowIds.length > 0 ? sm.packingRowIds.map((r) => `Empaque ${r.replace("PL-R", "Fila ")}`).join(", ") : "Sin cajas"}</span></td>
+                            <td className="py-4 px-4"><span className="block font-black">{sm.sku}</span><span className="block text-xs text-(--pm-text-secondary) mt-0.5">{sm.invoiceLineId ? formatOriginLabel(sm.invoiceLineId, locale) : dict.matrix.notInInvoice} ↔ {sm.packingRowIds.length > 0 ? sm.packingRowIds.map((r) => formatOriginLabel(r, locale)).join(", ") : dict.matrix.noBoxes}</span></td>
                             <td className="py-4 px-4">{invLine?.description || "-"}</td>
-                            <td className="py-4 px-4 whitespace-nowrap"><strong>{sm.invoiceQty !== null ? fmtNumber.format(sm.invoiceQty) : "-"}</strong> {sm.invoiceUnit}{sm.conversionFactorUsed && <span className="block text-xs text-(--pm-primary)">(1 SET = {sm.conversionFactorUsed} PCS → {fmtNumber.format(effInvQty ?? 0)} {sm.packingUnit})</span>}</td>
+                            <td className="py-4 px-4 whitespace-nowrap"><strong>{sm.invoiceQty !== null ? fmtNumber.format(sm.invoiceQty) : "-"}</strong> {sm.invoiceUnit}{sm.conversionFactorUsed && <span className="block text-xs text-(--pm-primary)">{formatTemplate(dict.matrix.factorNote, { factor: sm.conversionFactorUsed, qty: fmtNumber.format(effInvQty ?? 0), unit: sm.packingUnit ?? "" })}</span>}</td>
                             <td className="py-4 px-4 whitespace-nowrap"><strong>{fmtNumber.format(sm.packingTotalQty)}</strong> {sm.packingUnit}</td>
                             <td className="py-4 px-4 whitespace-nowrap">{qtyDiff === null ? <span className="text-(--pm-text-secondary)">-</span> : qtyDiff === 0 ? <span className="inline-flex px-3 py-1 rounded-full bg-(--pm-selection) text-(--pm-primary) font-bold text-xs">0</span> : <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-(--pm-error-bg) text-(--pm-error) font-bold text-xs"><span className="h-2 w-2 rounded-full bg-(--pm-error)" aria-hidden="true" />{qtyDiff > 0 ? "+" : ""}{fmtNumber.format(qtyDiff)} {sm.packingUnit}</span>}</td>
-                            <td className="py-4 px-4">{sm.status === "MATCHED" ? <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) font-bold text-xs"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> Cantidad coincide</span> : sm.status === "DISCREPANCY" ? <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-(--pm-error-bg) text-(--pm-error) font-bold text-xs"><AlertCircle className="w-4 h-4" aria-hidden="true" /> Diferencia</span> : <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-(--pm-warning-bg) text-(--pm-warning-text) font-bold text-xs"><HelpCircle className="w-4 h-4" aria-hidden="true" /> Por confirmar</span>}{otherFinding && <span className="flex items-center gap-1.5 mt-2 px-3 py-1.5 rounded-full bg-(--pm-warning-bg) text-(--pm-warning-text) font-bold text-xs w-fit"><AlertCircle className="w-3.5 h-3.5" aria-hidden="true" /> Otro hallazgo: {shortFindingLabel(otherFinding.code).toLowerCase()}.</span>}</td>
+                            <td className="py-4 px-4">{sm.status === "MATCHED" ? <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) font-bold text-xs"><CheckCircle2 className="w-4 h-4" aria-hidden="true" /> {dict.matrix.qtyMatch}</span> : sm.status === "DISCREPANCY" ? <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-(--pm-error-bg) text-(--pm-error) font-bold text-xs"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {dict.matrix.qtyDiff}</span> : <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-(--pm-warning-bg) text-(--pm-warning-text) font-bold text-xs"><HelpCircle className="w-4 h-4" aria-hidden="true" /> {dict.matrix.toConfirm}</span>}{otherFinding && <span className="flex items-center gap-1.5 mt-2 px-3 py-1.5 rounded-full bg-(--pm-warning-bg) text-(--pm-warning-text) font-bold text-xs w-fit"><AlertCircle className="w-3.5 h-3.5" aria-hidden="true" /> {formatTemplate(dict.matrix.otherFinding, { label: shortFindingLabel(otherFinding.code, locale).toLowerCase() })}</span>}</td>
                           </tr>
                         );
                       })}
-                      {reconciliation.skuSummaries.length === 0 && <tr><td colSpan={6} className="py-8 px-4 text-center text-(--pm-text-secondary)">Sin productos todavía. Agrega renglones en la captura manual (Paso 4).</td></tr>}
-                      {reconciliation.skuSummaries.length > 0 && reconciliation.skuSummaries.filter((sm) => matrixFilter === "all" ? true : matrixFilter === "match" ? sm.status === "MATCHED" : sm.status !== "MATCHED").length === 0 && <tr><td colSpan={6} className="py-8 px-4 text-center text-(--pm-text-secondary)">Ningún producto coincide con este filtro.</td></tr>}
+                      {reconciliation.skuSummaries.length === 0 && <tr><td colSpan={6} className="py-8 px-4 text-center text-(--pm-text-secondary)">{dict.matrix.noProducts}</td></tr>}
+                      {reconciliation.skuSummaries.length > 0 && reconciliation.skuSummaries.filter((sm) => matrixFilter === "all" ? true : matrixFilter === "match" ? sm.status === "MATCHED" : sm.status !== "MATCHED").length === 0 && <tr><td colSpan={6} className="py-8 px-4 text-center text-(--pm-text-secondary)">{dict.matrix.noFilterMatch}</td></tr>}
                     </tbody>
                   </table>
                 </div>
-                <p className="mt-4 flex items-start gap-2 text-sm text-(--pm-text-secondary)"><Info className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" /> La coincidencia de cantidades no resuelve otros hallazgos (p. ej., importe de factura).</p>
+                <p className="mt-4 flex items-start gap-2 text-sm text-(--pm-text-secondary)"><Info className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" /> {dict.matrix.note}</p>
               </section>
 
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <button type="button" onClick={() => goToStep(2)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> Volver a documentos</button>
-                <button type="button" onClick={() => goToStep(4)} className="btn-press inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">Preparar mensaje al proveedor <ArrowRight className="w-4 h-4" aria-hidden="true" /></button>
+                <button type="button" onClick={() => goToStep(2)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> {dict.matrix.backToDocs}</button>
+                <button type="button" onClick={() => goToStep(4)} className="btn-press inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer">{dict.matrix.goToMemo} <ArrowRight className="w-4 h-4" aria-hidden="true" /></button>
               </div>
             </>
           )}
@@ -1478,71 +1320,71 @@ export default function PackMatchWorkbench() {
               {showEditableTables ? (
                 <>
                   <div>
-                    <p className="text-[11px] font-bold tracking-[0.18em] text-(--pm-primary)">{isWorkspaceEmpty ? "CAPTURA DE DATOS" : "SIMULACIÓN"}</p>
+                    <p className="text-[11px] font-bold tracking-[0.18em] text-(--pm-primary)">{isWorkspaceEmpty ? dict.capture.eyebrowData : dict.capture.eyebrowSim}</p>
                     <div className="flex flex-wrap items-center justify-between gap-3 mt-1">
-                      <h1 className="text-3xl sm:text-4xl font-black tracking-tight">{isWorkspaceEmpty ? "Captura manual" : "Simulación manual"}</h1>
-                      {!hasData && <span className="px-3 py-1.5 rounded-full border border-(--pm-border) bg-white text-sm font-bold text-(--pm-text-secondary)">Sin datos</span>}
+                      <h1 className="text-3xl sm:text-4xl font-black tracking-tight">{isWorkspaceEmpty ? dict.capture.titleManual : dict.capture.titleSim}</h1>
+                      {!hasData && <span className="px-3 py-1.5 rounded-full border border-(--pm-border) bg-white text-sm font-bold text-(--pm-text-secondary)">{dict.capture.badgeNoData}</span>}
                     </div>
-                    <p className="mt-1 text-sm text-(--pm-text-secondary)">{isWorkspaceEmpty ? "Agrega los productos de la factura y las cajas del envío." : "Cambia una cantidad o peso y comprueba al instante si el embarque queda listo."}</p>
+                    <p className="mt-1 text-sm text-(--pm-text-secondary)">{isWorkspaceEmpty ? dict.capture.hintEmpty : dict.capture.hintSim}</p>
                   </div>
                   <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5 items-start">
                     {editableTables}
                     <PackMatchMemo supplierMemo={supplierMemo} canExport={canExport} memoLang={memoLang} onLangChange={setMemoLang} copiedMemo={copiedMemo} onCopy={handleCopyMemo} onDownload={handleDownloadCsv} compact={true} />
                   </div>
-                  {hasData && findings.length > 0 && (<div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl bg-(--pm-error-bg) border border-(--pm-error-border) px-5 py-3 text-sm"><span className="inline-flex items-center gap-2 font-bold text-(--pm-error)"><AlertCircle className="w-5 h-5" aria-hidden="true" /> {findings.length} hallazgo{findings.length === 1 ? "" : "s"} por revisar</span><span className="text-(--pm-text-secondary)">{findings.map((f) => shortFindingTitle(f, invoice, reconciliation.skuSummaries)).join(" · ")}</span></div>)}
-                  <div className="flex justify-start"><button type="button" onClick={() => goToStep(1)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-primary) bg-white text-(--pm-primary) text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> Volver al diagnóstico</button></div>
+                  {hasData && findings.length > 0 && (<div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl bg-(--pm-error-bg) border border-(--pm-error-border) px-5 py-3 text-sm"><span className="inline-flex items-center gap-2 font-bold text-(--pm-error)"><AlertCircle className="w-5 h-5" aria-hidden="true" /> {formatTemplate(dict.capture.findingsAlert, { count: findings.length, plural: pluralS(findings.length) })}</span><span className="text-(--pm-text-secondary)">{findings.map((f) => shortFindingTitle(f, invoice, reconciliation.skuSummaries, locale)).join(" · ")}</span></div>)}
+                  <div className="flex justify-start"><button type="button" onClick={() => goToStep(1)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-primary) bg-white text-(--pm-primary) text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> {dict.capture.backToDiagnosis}</button></div>
                 </>
               ) : (
                 <>
                   <div>
                     {eyebrow && <p className="text-[11px] font-bold tracking-[0.18em] text-(--pm-primary)">{eyebrow}</p>}
                     <div className="flex flex-wrap items-center gap-3 mt-1">
-                      <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Mensaje al proveedor</h1>
+                      <h1 className="text-3xl sm:text-4xl font-black tracking-tight">{dict.memoStep.title}</h1>
                       <span className="hidden sm:block w-px h-8 bg-(--pm-border)" aria-hidden="true" />
-                      {discrepanciesCount > 0 && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {discrepanciesCount} Discrepancia{discrepanciesCount === 1 ? "" : "s"}</span>}
-                      {ambiguitiesCount > 0 && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-warning-border) bg-(--pm-warning-bg) text-sm font-bold text-(--pm-warning-text)"><HelpCircle className="w-4 h-4" aria-hidden="true" /> Requiere revisión</span>}
-                      <span className="ml-auto hidden lg:inline-block text-[11px] font-bold tracking-widest px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">MINUTA PRE-DESPACHO</span>
+                      {discrepanciesCount > 0 && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-error-border) bg-(--pm-error-bg) text-sm font-bold text-(--pm-error)"><AlertCircle className="w-4 h-4" aria-hidden="true" /> {formatTemplate(dict.memoStep.discrepancies, { count: discrepanciesCount, plural: discPlural })}</span>}
+                      {ambiguitiesCount > 0 && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-(--pm-warning-border) bg-(--pm-warning-bg) text-sm font-bold text-(--pm-warning-text)"><HelpCircle className="w-4 h-4" aria-hidden="true" /> {dict.memoStep.needsReview}</span>}
+                      <span className="ml-auto hidden lg:inline-block text-[11px] font-bold tracking-widest px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">{dict.memoStep.badge}</span>
                     </div>
-                    <p className="mt-1 text-sm text-(--pm-text-secondary)">Copie y envíe la minuta a la fábrica para que corrijan las diferencias.</p>
+                    <p className="mt-1 text-sm text-(--pm-text-secondary)">{dict.memoStep.hint}</p>
                   </div>
 
                   <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5 items-start">
-                    <section aria-label="Minuta" className="bg-white rounded-2xl border border-(--pm-border) p-5 sm:p-6">
-                      <div className="flex items-center justify-between gap-3 pb-4 border-b border-(--pm-border)"><BrandLogo size="sm" theme="light" /><span className="text-[11px] font-bold tracking-widest px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">MINUTA PRE-DESPACHO</span></div>
-                      {hasData ? <pre className="mt-4 whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-(--pm-ink)">{supplierMemo}</pre> : <div className="mt-4 rounded-xl border border-dashed border-(--pm-border) bg-(--pm-paper) px-4 py-12 text-center text-sm text-(--pm-text-secondary)">El mensaje estará disponible cuando agregues datos completos y válidos.</div>}
+                    <section aria-label={dict.memoStep.memoAria} className="bg-white rounded-2xl border border-(--pm-border) p-5 sm:p-6">
+                      <div className="flex items-center justify-between gap-3 pb-4 border-b border-(--pm-border)"><BrandLogo size="sm" theme="light" /><span className="text-[11px] font-bold tracking-widest px-3 py-1.5 rounded-full bg-(--pm-selection) text-(--pm-primary) border border-(--pm-border)">{dict.memoStep.badge}</span></div>
+                      {hasData ? <pre lang={memoLang} title={formatTemplate(dict.memoStep.memoLangNote, { lang: memoLang })} className="mt-4 whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-(--pm-ink)">{supplierMemo}</pre> : <div className="mt-4 rounded-xl border border-dashed border-(--pm-border) bg-(--pm-paper) px-4 py-12 text-center text-sm text-(--pm-text-secondary)">{dict.memoStep.empty}</div>}
                     </section>
                     <div className="flex flex-col gap-4">
-                      <div role="group" aria-label="Idioma del mensaje" className="flex rounded-full border border-(--pm-border) bg-white p-1 w-fit">
-                        <button type="button" aria-pressed={memoLang === "es"} onClick={() => setMemoLang("es")} className={`btn-press px-4 py-2 rounded-full text-sm font-bold cursor-pointer ${memoLang === "es" ? "bg-(--pm-ink) text-white" : "text-(--pm-text-secondary)"}`}>Español (Minuta)</button>
-                        <button type="button" aria-pressed={memoLang === "en"} onClick={() => setMemoLang("en")} className={`btn-press px-4 py-2 rounded-full text-sm font-bold cursor-pointer ${memoLang === "en" ? "bg-(--pm-ink) text-white" : "text-(--pm-text-secondary)"}`}>English (Claim Note)</button>
+                      <div role="group" aria-label={dict.memoStep.langGroup} className="flex rounded-full border border-(--pm-border) bg-white p-1 w-fit">
+                        <button type="button" aria-pressed={memoLang === "es"} onClick={() => setMemoLang("es")} className={`btn-press px-4 py-2 rounded-full text-sm font-bold cursor-pointer ${memoLang === "es" ? "bg-(--pm-ink) text-white" : "text-(--pm-text-secondary)"}`}>{dict.memoStep.spanishNote}</button>
+                        <button type="button" aria-pressed={memoLang === "en"} onClick={() => setMemoLang("en")} className={`btn-press px-4 py-2 rounded-full text-sm font-bold cursor-pointer ${memoLang === "en" ? "bg-(--pm-ink) text-white" : "text-(--pm-text-secondary)"}`}>{dict.memoStep.englishNote}</button>
                       </div>
-                      <section aria-label="Referencia del embarque" className="bg-white rounded-2xl border border-(--pm-border) p-5">
-                        <h2 className="text-base font-bold mb-3">Referencia del embarque</h2>
+                      <section aria-label={dict.memoStep.referenceAria} className="bg-white rounded-2xl border border-(--pm-border) p-5">
+                        <h2 className="text-base font-bold mb-3">{dict.memoStep.reference}</h2>
                         <dl className="flex flex-col gap-2 text-sm">
-                          <div className="flex items-center justify-between gap-3 rounded-lg bg-(--pm-paper) px-3 py-2"><dt className="inline-flex items-center gap-2 text-(--pm-text-secondary)"><FileText className="w-4 h-4" aria-hidden="true" /> Factura</dt><dd className="font-bold">{invoice.invoice_no}</dd></div>
-                          <div className="flex items-center justify-between gap-3 rounded-lg bg-(--pm-paper) px-3 py-2"><dt className="inline-flex items-center gap-2 text-(--pm-text-secondary)"><Package className="w-4 h-4" aria-hidden="true" /> Packing List</dt><dd className="font-bold">{packingList.packing_list_no}</dd></div>
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-(--pm-paper) px-3 py-2"><dt className="inline-flex items-center gap-2 text-(--pm-text-secondary)"><FileText className="w-4 h-4" aria-hidden="true" /> {dict.memoStep.invoice}</dt><dd className="font-bold">{invoice.invoice_no}</dd></div>
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-(--pm-paper) px-3 py-2"><dt className="inline-flex items-center gap-2 text-(--pm-text-secondary)"><Package className="w-4 h-4" aria-hidden="true" /> {dict.memoStep.packingList}</dt><dd className="font-bold">{packingList.packing_list_no}</dd></div>
                         </dl>
                       </section>
-                      <section aria-label="Hallazgos" className="bg-white rounded-2xl border border-(--pm-border) p-5">
-                        <h2 className="text-base font-bold mb-3">Hallazgos · {findings.length}</h2>
-                        {findings.length === 0 ? <p className="text-sm text-(--pm-text-secondary)">{hasData ? "Sin diferencias detectadas." : "Sin datos."}</p> : (
-                          <ul className="flex flex-col gap-2">{findings.map((f, i) => (<li key={`${f.code}-${f.sku}-${i}`} className={`rounded-xl border p-3 flex gap-2.5 ${f.severity === "DISCREPANCY" ? "bg-(--pm-error-bg) border-(--pm-error-border)" : "bg-(--pm-warning-bg) border-(--pm-warning-border)"}`}>{f.severity === "DISCREPANCY" ? <AlertCircle className="w-5 h-5 text-(--pm-error) shrink-0" aria-hidden="true" /> : <HelpCircle className="w-5 h-5 text-(--pm-warning-text) shrink-0" aria-hidden="true" />}<span><strong className="block text-sm">{shortFindingTitle(f, invoice, reconciliation.skuSummaries)}</strong><span className="block text-xs text-(--pm-text-secondary) mt-0.5">{f.origins.join(", ")}</span></span></li>))}</ul>
+                      <section aria-label={dict.memoStep.findingsAria} className="bg-white rounded-2xl border border-(--pm-border) p-5">
+                        <h2 className="text-base font-bold mb-3">{formatTemplate(dict.memoStep.findings, { count: findings.length })}</h2>
+                        {findings.length === 0 ? <p className="text-sm text-(--pm-text-secondary)">{hasData ? dict.memoStep.noDiff : dict.memoStep.noData}</p> : (
+                          <ul className="flex flex-col gap-2">{findings.map((f, i) => (<li key={`${f.code}-${f.sku}-${i}`} className={`rounded-xl border p-3 flex gap-2.5 ${f.severity === "DISCREPANCY" ? "bg-(--pm-error-bg) border-(--pm-error-border)" : "bg-(--pm-warning-bg) border-(--pm-warning-border)"}`}>{f.severity === "DISCREPANCY" ? <AlertCircle className="w-5 h-5 text-(--pm-error) shrink-0" aria-hidden="true" /> : <HelpCircle className="w-5 h-5 text-(--pm-warning-text) shrink-0" aria-hidden="true" />}<span><strong className="block text-sm">{shortFindingTitle(f, invoice, reconciliation.skuSummaries, locale)}</strong><span className="block text-xs text-(--pm-text-secondary) mt-0.5">{f.origins.join(", ")}</span></span></li>))}</ul>
                         )}
                       </section>
                       <div className="flex flex-wrap gap-3">
-                        <button type="button" onClick={handleCopyMemo} disabled={!canExport} className="btn-press flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"><Copy className="w-4 h-4" aria-hidden="true" /> {copiedMemo ? "Copiado" : "Copiar mensaje"}</button>
-                        <button type="button" onClick={handleDownloadCsv} disabled={!canExport} className="btn-press flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-(--pm-border) bg-white text-sm font-bold disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"><Download className="w-4 h-4" aria-hidden="true" /> Descargar CSV</button>
+                        <button type="button" onClick={handleCopyMemo} disabled={!canExport} className="btn-press flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"><Copy className="w-4 h-4" aria-hidden="true" /> {copiedMemo ? dict.memoStep.copied : dict.memoStep.copy}</button>
+                        <button type="button" onClick={handleDownloadCsv} disabled={!canExport} className="btn-press flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-(--pm-border) bg-white text-sm font-bold disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"><Download className="w-4 h-4" aria-hidden="true" /> {dict.memoStep.downloadCsv}</button>
                       </div>
                     </div>
                   </div>
 
-                  <section aria-label="Simulación manual" className="bg-white rounded-2xl border border-(--pm-border)">
+                  <section aria-label={dict.memoStep.simAria} className="bg-white rounded-2xl border border-(--pm-border)">
                     <button type="button" aria-expanded={showEditableTables} onClick={() => setShowEditableTables((v) => !v)} className="btn-press w-full flex flex-wrap items-center gap-3 px-5 py-4 text-left cursor-pointer">
                       <ChevronDown className={`w-5 h-5 transition-transform ${showEditableTables ? "rotate-180" : ""}`} aria-hidden="true" />
-                      <span><strong className="block text-sm">Simulación manual (opcional)</strong><span className="text-xs text-(--pm-text-secondary)">Cambia una cantidad o peso y comprueba al instante si el embarque queda listo.</span></span>
+                      <span><strong className="block text-sm">{dict.memoStep.simTitle}</strong><span className="text-xs text-(--pm-text-secondary)">{dict.memoStep.simHint}</span></span>
                     </button>
                   </section>
-                  <div><button type="button" onClick={() => goToStep(1)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> Volver al diagnóstico</button></div>
+                  <div><button type="button" onClick={() => goToStep(1)} className="btn-press inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-(--pm-border) bg-white text-sm font-bold cursor-pointer"><ArrowLeft className="w-4 h-4" aria-hidden="true" /> {dict.memoStep.backToDiagnosis}</button></div>
                 </>
               )}
             </>
@@ -1553,8 +1395,8 @@ export default function PackMatchWorkbench() {
       <footer className={`mt-auto border-t px-4 sm:px-6 py-4 ${shipmentMode === "empty" ? "border-(--pm-dark-border) text-(--pm-dark-secondary)" : "border-(--pm-border) text-(--pm-text-secondary)"}`}>
         <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-2 text-xs">
           <span>PackMatch</span>
-          <span>La evidencia primero. Cada dato en su lugar.</span>
-          {shipmentMode === "empty" && <span className="hidden sm:block">Factura ↔ Empaque</span>}
+          <span>{dict.footer.evidence}</span>
+          {shipmentMode === "empty" && <span className="hidden sm:block">{dict.footer.hubHint}</span>}
         </div>
       </footer>
 
@@ -1562,33 +1404,41 @@ export default function PackMatchWorkbench() {
         <div role="dialog" aria-modal="true" aria-labelledby="paste-modal-title" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-(--pm-ink)/80" onClick={() => setShowPasteModal(false)}>
           <div className="w-full max-w-4xl max-h-[90vh] flex flex-col bg-(--pm-dark-surface) border border-(--pm-dark-border) rounded-2xl shadow-2xl overflow-hidden text-(--pm-paper)" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 flex items-start justify-between gap-4">
-              <div><p className="text-[11px] font-bold tracking-[0.2em] text-(--pm-sage)">IMPORTAR DATOS</p><h2 id="paste-modal-title" className="text-2xl sm:text-3xl font-black mt-1">Pegar celdas desde Excel / CSV</h2><p className="text-sm text-(--pm-dark-secondary) mt-1">Copia las filas de cada documento y pégalas en su espacio.</p></div>
-              <button type="button" onClick={() => setShowPasteModal(false)} aria-label="Cerrar importación" className="btn-press p-2 rounded-full hover:bg-(--pm-dark-border) cursor-pointer shrink-0"><X className="w-5 h-5" aria-hidden="true" /></button>
+              <div><p className="text-[11px] font-bold tracking-[0.2em] text-(--pm-sage)">{dict.pasteModal.eyebrow}</p><h2 id="paste-modal-title" className="text-2xl sm:text-3xl font-black mt-1">{dict.pasteModal.title}</h2><p className="text-sm text-(--pm-dark-secondary) mt-1">{dict.pasteModal.hint}</p></div>
+              <button type="button" onClick={() => setShowPasteModal(false)} aria-label={dict.pasteModal.close} className="btn-press p-2 rounded-full hover:bg-(--pm-dark-border) cursor-pointer shrink-0"><X className="w-5 h-5" aria-hidden="true" /></button>
             </div>
             <div className="px-6 pb-4 overflow-y-auto grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-4 items-stretch">
               <div className="rounded-xl border border-(--pm-dark-border) bg-(--pm-dark-inset) p-4">
-                <div className="flex items-center gap-3 mb-3"><span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-(--pm-dark-raised) text-(--pm-sage)"><FileText className="w-5 h-5" aria-hidden="true" /></span><span><span className="text-xs text-(--pm-dark-secondary) mr-2">01</span><strong>Factura comercial</strong><span className="block text-xs text-(--pm-dark-secondary) mt-0.5">SKU · Descripción · Cantidad · Unidad · Precio · Subtotal</span></span></div>
-                <label htmlFor="paste-invoice" className="sr-only">Filas de la factura</label>
-                <textarea id="paste-invoice" autoFocus value={pasteInvoiceText} onChange={(e) => setPasteInvoiceText(e.target.value)} rows={8} placeholder="Pega aquí las filas de la factura" className="w-full p-3 rounded-lg bg-(--pm-ink) border border-dashed border-(--pm-dark-dashed) text-sm text-(--pm-paper) placeholder:text-(--pm-dark-secondary)" />
+                <div className="flex items-center gap-3 mb-3"><span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-(--pm-dark-raised) text-(--pm-sage)"><FileText className="w-5 h-5" aria-hidden="true" /></span><span><span className="text-xs text-(--pm-dark-secondary) mr-2">01</span><strong>{dict.landing.dropInvoiceTitle}</strong><span className="block text-xs text-(--pm-dark-secondary) mt-0.5">{dict.pasteModal.invoiceFormat}</span></span></div>
+                <label htmlFor="paste-invoice" className="sr-only">{dict.pasteModal.invoiceLines}</label>
+                <textarea id="paste-invoice" autoFocus value={pasteInvoiceText} onChange={(e) => setPasteInvoiceText(e.target.value)} rows={8} placeholder={dict.pasteModal.invoicePlaceholder} className="w-full p-3 rounded-lg bg-(--pm-ink) border border-dashed border-(--pm-dark-dashed) text-sm text-(--pm-paper) placeholder:text-(--pm-dark-secondary)" />
               </div>
               <span className="hidden md:flex items-center text-(--pm-sage) text-2xl" aria-hidden="true">==</span>
               <div className="rounded-xl border border-(--pm-dark-border) bg-(--pm-dark-inset) p-4">
-                <div className="flex items-center gap-3 mb-3"><span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-(--pm-dark-raised) text-(--pm-sage)"><Package className="w-5 h-5" aria-hidden="true" /></span><span><span className="text-xs text-(--pm-dark-secondary) mr-2">02</span><strong>Lista de empaque</strong><span className="block text-xs text-(--pm-dark-secondary) mt-0.5">Rango · SKU · Cajas · Unid./caja · Total · Neto · Bruto</span></span></div>
-                <label htmlFor="paste-packing" className="sr-only">Filas de la lista de empaque</label>
-                <textarea id="paste-packing" value={pastePackingText} onChange={(e) => setPastePackingText(e.target.value)} rows={8} placeholder="Pega aquí las filas de la lista de empaque" className="w-full p-3 rounded-lg bg-(--pm-ink) border border-dashed border-(--pm-dark-dashed) text-sm text-(--pm-paper) placeholder:text-(--pm-dark-secondary)" />
+                <div className="flex items-center gap-3 mb-3"><span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-(--pm-dark-raised) text-(--pm-sage)"><Package className="w-5 h-5" aria-hidden="true" /></span><span><span className="text-xs text-(--pm-dark-secondary) mr-2">02</span><strong>{dict.landing.dropPackingTitle}</strong><span className="block text-xs text-(--pm-dark-secondary) mt-0.5">{dict.pasteModal.packingFormat}</span></span></div>
+                <label htmlFor="paste-packing" className="sr-only">{dict.pasteModal.packingLines}</label>
+                <textarea id="paste-packing" value={pastePackingText} onChange={(e) => setPastePackingText(e.target.value)} rows={8} placeholder={dict.pasteModal.packingPlaceholder} className="w-full p-3 rounded-lg bg-(--pm-ink) border border-dashed border-(--pm-dark-dashed) text-sm text-(--pm-paper) placeholder:text-(--pm-dark-secondary)" />
               </div>
             </div>
             {pasteError && <div role="alert" className="mx-6 mb-3 px-4 py-2.5 rounded-lg bg-(--pm-error-bg) text-sm text-(--pm-error) font-medium">{pasteError}</div>}
             <div className="px-6 py-4 border-t border-(--pm-dark-border) flex flex-wrap items-center justify-between gap-3">
-              <span className="text-sm text-(--pm-dark-secondary)">Separadores admitidos: tabulación, coma o punto y coma.</span>
+              <span className="text-sm text-(--pm-dark-secondary)">{dict.pasteModal.separators}</span>
               <span className="flex gap-2">
-                <button type="button" onClick={() => setShowPasteModal(false)} className="btn-press px-5 py-2.5 rounded-full border border-(--pm-paper)/50 text-sm font-bold cursor-pointer">Cancelar</button>
-                <button type="button" onClick={handleImportPastedCells} className="btn-press px-6 py-2.5 rounded-full bg-(--pm-sage) text-(--pm-ink) text-sm font-black cursor-pointer">Cruzar datos</button>
+                <button type="button" onClick={() => setShowPasteModal(false)} className="btn-press px-5 py-2.5 rounded-full border border-(--pm-paper)/50 text-sm font-bold cursor-pointer">{dict.pasteModal.cancel}</button>
+                <button type="button" onClick={handleImportPastedCells} className="btn-press px-6 py-2.5 rounded-full bg-(--pm-sage) text-(--pm-ink) text-sm font-black cursor-pointer">{dict.pasteModal.cross}</button>
               </span>
             </div>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+export default function PackMatchWorkbenchPage() {
+  return (
+    <UiLocaleProvider>
+      <PackMatchWorkbench />
+    </UiLocaleProvider>
   );
 }

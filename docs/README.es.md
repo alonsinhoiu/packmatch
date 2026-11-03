@@ -40,4 +40,13 @@ npm run build
 
 La prueba de paridad detecta 13/13 hallazgos esperados en siete casos sintéticos, con orígenes exactos y cero alertas adicionales, tanto para los datos de referencia como para extracciones guardadas. No representa una garantía para documentos nuevos. [Metodología y límites](VALIDATION.md).
 
+## Dos selectores de idioma
+
+PackMatch distingue el **idioma de la interfaz** del **idioma de la minuta**:
+
+- **Selector global (cabecera, “Español / English”)**: cambia toda la interfaz al instante —inicio, los cuatro pasos, diagnósticos, filtros, modales, validaciones y ayudas— sin reiniciar el caso, borrar archivos, perder ediciones, cambiar de paso, limpiar el registro del operador ni disparar una nueva extracción. Guarda la elección en `localStorage` (`packmatch.uiLocale`); sin preferencia válida usa español. Funciona con teclado (radiogroup con flechas) y anuncia el idioma activo. El parámetro `?lang=` no lo afecta.
+- **Selector del mensaje (paso 4 y panel lateral)**: cambia exclusivamente el contenido de la minuta (`memoLang`, conservando `?lang=en|es`). Puedes usar la interfaz en inglés y generar la minuta en español, y viceversa. Cambiar el idioma global nunca sobrescribe la minuta.
+
+Los números se presentan con `Intl.NumberFormat` (`es-CL` / `en-US`); la moneda real del documento se conserva y los datos ingresados no se reinterpretan. El contenido de los documentos, SKUs, identificadores y datos del usuario no se traducen.
+
 Creado por [Alonso Céspedes](https://github.com/alonsinhoiu), desde Chile, para el Meta Global AI Developer Hackathon 2026. Licencia [MIT](../LICENSE).

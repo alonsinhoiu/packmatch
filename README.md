@@ -41,6 +41,9 @@ The seven bundled examples and spreadsheet/manual entry work without an API key.
 | Visual traceability | Findings linked to their originating document rows |
 | Operator review | Explicit confirmation of missing pieces-per-set factors |
 | Supplier handoff | Spanish/English memos, operator audit entries and CSV export |
+| Interface language | Global Español/English switcher, independent from the memo language |
+
+Two language selectors: the **header switcher** changes the whole UI instantly (persisted in `localStorage` as `packmatch.uiLocale`, Spanish by default, `?lang=` untouched) without resetting the case, files, edits, step, audit log or AI extraction; the **message selector** (step 4 and side panel) changes only the memo content (`memoLang`, honoring `?lang=en|es`). Either combination works — e.g. English UI with a Spanish memo. See [Español](docs/README.es.md) for details.
 
 <details>
 <summary><strong>See the workspace and supplier memo</strong></summary>
@@ -99,7 +102,7 @@ The key stays on the server. Never add it to client code or commit it. The brows
 ## Reproduce the checks
 
 ```bash
-npm run test:qa          # 33 regression checks
+npm run test:qa          # 42 regression checks
 npm run verify-parity    # Seven fixtures + recorded model extractions
 npx tsc --noEmit         # Type checking
 npm run build           # Production build

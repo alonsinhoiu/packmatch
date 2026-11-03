@@ -1,4 +1,7 @@
+"use client";
+
 import React from "react";
+import { useUiLocale } from "@/lib/i18n/UiLocaleContext";
 
 export interface BrandLogoProps {
   variant?: "horizontal" | "mark" | "stacked";
@@ -15,12 +18,13 @@ export function BrandLogoMark({ size = "md", className = "" }: Pick<BrandLogoPro
 }
 
 export function BrandLogo({ variant = "horizontal", size = "md", theme = "dark", showTagline = false, className = "" }: BrandLogoProps) {
+  const { dict } = useUiLocale();
   if (variant === "mark") return <BrandLogoMark size={size} className={className} />;
   const asset = variant === "stacked" ? "stacked" : "logo";
   return (
     <div className={`pm-brand ${theme === "auto" ? "pm-brand-auto" : ""} ${className}`}>
       <img src={`/brand/packmatch-${asset}-${theme === "auto" ? "light" : theme}.svg`} alt="PackMatch" width={variant === "stacked" ? sizes[size] * 3.75 : sizes[size] * 4.125} height={variant === "stacked" ? sizes[size] * 2.25 : sizes[size]} className="pm-brand-image" />
-      {showTagline && <span className={`pm-brand-tagline ${theme === "dark" ? "text-slate-300" : "text-slate-600"}`}>Conciliación pre-despacho</span>}
+      {showTagline && <span className={`pm-brand-tagline ${theme === "dark" ? "text-slate-300" : "text-slate-600"}`}>{dict.meta.tagline}</span>}
     </div>
   );
 }
