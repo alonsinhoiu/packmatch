@@ -1,11 +1,12 @@
 import { es, type Dictionary } from "./dictionaries-es.ts";
 import { en } from "./dictionaries-en.ts";
+import { zh } from "./dictionaries-zh.ts";
 import type { UiLocale } from "./locale.ts";
 
 export type { Dictionary };
-export { es, en };
+export { es, en, zh };
 
-const MAP: Record<UiLocale, Dictionary> = { es, en };
+const MAP: Record<UiLocale, Dictionary> = { es, en, zh };
 
 export function getDictionary(locale: UiLocale): Dictionary {
   return MAP[locale] ?? es;

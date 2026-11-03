@@ -6,18 +6,62 @@ import type {
   PackingListRow,
 } from "./reconcile";
 
+/** NFKC: pliega ancho completo (１２３, ，．) a ASCII para comparar y calcular. */
+export function nfkc(s: string): string {
+  return s.normalize("NFKC");
+}
+
+/**
+ * Interpreta un número respetando las convenciones del documento:
+ * - NFKC previo (dígitos/separadores de ancho completo -> ASCII).
+ * - Con ambos separadores, el último es el decimal ("1,250.50" y "1.250,50" -> 1250.5).
+ * - Con uno solo: múltiples ocurrencias o grupo final de 3 dígitos -> miles ("1,250" -> 1250,
+ *   "1.250" -> 1250); en otro caso el separador es decimal ("4,5" -> 4.5).
+ * Devuelve null si no hay ningún dígito (ilegible): el llamador decide el fallback
+ * en lugar de inventar silently un valor distinto de cero.
+ */
+export function parseLocalizedNumber(raw: string): number | null {
+  let s = raw.normalize("NFKC").trim();
+  if (!s) return null;
+  s = s
+    .replace(/[$€£¥\s ]/g, "")
+    .replace(/^(USD|EUR|CLP|CNY|RMB)/i, "")
+    .replace(/(USD|EUR|CLP|CNY|RMB|KGS?|LBS?|KG|元|美元|块)$/i, "");
+  s = s.replace(/[^0-9,.\-]/g, "");
+  if (!/[0-9]/.test(s)) return null;
+  const hasComma = s.includes(",");
+  const hasDot = s.includes(".");
+  let canonical: string;
+  if (hasComma && hasDot) {
+    canonical =
+      s.lastIndexOf(",") > s.lastIndexOf(".")
+        ? s.replace(/\./g, "").replace(",", ".")
+        : s.replace(/,/g, "");
+  } else if (hasComma) {
+    const commas = (s.match(/,/g) || []).length;
+    canonical = commas > 1 || /,\d{3}$/.test(s) ? s.replace(/,/g, "") : s.replace(",", ".");
+  } else if (hasDot) {
+    const dots = (s.match(/\./g) || []).length;
+    canonical = dots > 1 || /\.\d{3}$/.test(s) ? s.replace(/\./g, "") : s;
+  } else {
+    canonical = s;
+  }
+  const n = Number(canonical);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function parseSafeNumber(val: unknown, fallback = 0): number {
   if (typeof val === "number" && Number.isFinite(val)) return val;
   if (typeof val === "string") {
-    const cleaned = val.replace(/[^0-9.-]+/g, "");
-    const parsed = Number(cleaned);
-    if (Number.isFinite(parsed)) return parsed;
+    const parsed = parseLocalizedNumber(val);
+    if (parsed !== null) return parsed;
   }
   return fallback;
 }
 
 export function normalizeDiscreteUnit(rawUnit: unknown): string {
   const u = String(rawUnit ?? "PCS")
+    .normalize("NFKC")
     .toUpperCase()
     .replace(/\./g, "")
     .trim();
@@ -35,39 +79,62 @@ export function normalizeDiscreteUnit(rawUnit: unknown): string {
       "UND",
       "PZA",
       "PZAS",
+      // Contables inequívocos en chino: 件/个/只/台/片/支/颗/粒/瓶/袋
+      "件",
+      "个",
+      "只",
+      "台",
+      "片",
+      "支",
+      "颗",
+      "粒",
+      "瓶",
+      "袋",
     ].includes(u)
   ) {
     return "PCS";
   }
-  if (["SET", "SETS", "KIT", "KITS", "ASSY", "PACK", "PACKS"].includes(u)) {
+  // Conjuntos inequívocos en chino: 套/组
+  if (["SET", "SETS", "KIT", "KITS", "ASSY", "PACK", "PACKS", "套", "组"].includes(u)) {
     return "SETS";
   }
+  // Unidades de embalaje ambiguas (箱, pallet, rollo...) se copian VERBATIM:
+  // el motor las dejará como ambigüedad que requiere confirmación.
   return u || "PCS";
 }
 
 export function normalizeWeightUnit(rawUnit: unknown): string {
   const u = String(rawUnit ?? "KG")
+    .normalize("NFKC")
     .toUpperCase()
     .replace(/\./g, "")
     .trim();
-  if (["LB", "LBS", "POUND", "POUNDS"].includes(u)) return "LBS";
-  if (["KG", "KGS", "KILO", "KILOS", "KILOGRAM", "KILOGRAMS"].includes(u))
+  if (["LB", "LBS", "POUND", "POUNDS", "磅", "英磅"].includes(u)) return "LBS";
+  if (["KG", "KGS", "KILO", "KILOS", "KILOGRAM", "KILOGRAMS", "千克", "公斤"].includes(u))
     return "KG";
+  //克 (gramo) y 吨 (tonelada) NO se convierten: copiar verbatim y dejar que la
+  // revisión del operador lo aclare en lugar de multiplicar/dividir a ciegas.
   return u || "KG";
 }
 
 export function extractExplicitFactorFromText(text: string): number | null {
   if (!text) return null;
+  const t = text.normalize("NFKC");
   // Detecta patrones explícitos escritos en el documento como:
-  // "1 SET = 4 PCS", "1 KIT = 10 PCS", "(4 PCS/SET)", "10 pcs per set"
-  const m1 = text.match(
-    /1\s*(?:SET|KIT|PACK)\s*(?:=|EQUALS|CONTAINS|:)\s*(\d+)\s*(?:PCS|PC|PIECES|EA)/i
+  // "1 SET = 4 PCS", "1 KIT = 10 PCS", "(4 PCS/SET)", "10 pcs per set",
+  // "1套=4件", "1套:4件", "每套4件", "4件/套"
+  const m1 = t.match(
+    /1\s*(?:SET|KIT|PACK|套|组)\s*(?:=|EQUALS|CONTAINS|:|：)\s*(\d+)\s*(?:PCS|PC|PIECES|EA|件|个|只)/i
   );
   if (m1) return Number(m1[1]);
-  const m2 = text.match(
-    /(\d+)\s*(?:PCS|PC|PIECES|EA)\s*(?:\/|PER)\s*(?:SET|KIT|PACK)/i
+  const m2 = t.match(
+    /每\s*(?:SET|KIT|套|组)\s*(\d+)\s*(?:PCS|PC|PIECES|EA|件|个|只)/i
   );
   if (m2) return Number(m2[1]);
+  const m3 = t.match(
+    /(\d+)\s*(?:PCS|PC|PIECES|EA|件|个|只)\s*(?:\/|／|PER)\s*(?:SET|KIT|PACK|套|组)/i
+  );
+  if (m3) return Number(m3[1]);
   return null;
 }
 
@@ -122,6 +189,8 @@ export function normalizeExtractedPayload(raw: any): {
     const description = String(
       line?.description ?? line?.item_description ?? line?.name ?? ""
     ).trim();
+    // NFKC en SKU: pliega ancho completo (ＡＢＣ-１２３ -> ABC-123) de forma
+    // consistente en factura y empaque; nunca traduce ni fusiona distintos.
     const sku = String(
       line?.sku ??
         line?.part_number ??
@@ -129,7 +198,9 @@ export function normalizeExtractedPayload(raw: any): {
         line?.item_code ??
         line?.pn ??
         `ITEM-${idx + 1}`
-    ).trim();
+    )
+      .normalize("NFKC")
+      .trim();
 
     const explicitFromField =
       line?.explicit_pcs_per_set !== null &&
@@ -176,12 +247,15 @@ export function normalizeExtractedPayload(raw: any): {
 
     const cartonRange = String(
       row?.carton_range ?? row?.carton_no ?? row?.box_no ?? `CTN ${idx + 1}`
-    ).trim();
+    )
+      .normalize("NFKC")
+      .trim();
     const rawCartonCountStr = String(row?.carton_count ?? "").toUpperCase();
     const explicitlyShared =
       Boolean(row?.shared_carton) ||
       rawCartonCountStr.includes("SHARED") ||
-      cartonRange.toUpperCase().includes("SHARED");
+      cartonRange.toUpperCase().includes("SHARED") ||
+      cartonRange.includes("共享");
 
     const rangeKey = cartonRange.toUpperCase().replace(/\s+/g, "");
     const implicitlyShared =
@@ -210,7 +284,9 @@ export function normalizeExtractedPayload(raw: any): {
         row?.item_code ??
         row?.pn ??
         `ITEM-${idx + 1}`
-    ).trim();
+    )
+      .normalize("NFKC")
+      .trim();
     const totalQty = parseSafeNumber(row?.total_qty ?? row?.qty, 0);
     const qtyPerCarton = parseSafeNumber(
       row?.qty_per_carton ?? row?.qty_per_box,
@@ -220,7 +296,7 @@ export function normalizeExtractedPayload(raw: any): {
     const isPackaging =
       Boolean(row?.is_packaging_only) ||
       (totalQty === 0 &&
-        /FOAM|PALLET|DUNNAGE|PACKAGING|CRATE/i.test(sku));
+        /FOAM|PALLET|DUNNAGE|PACKAGING|CRATE|托盘|泡沫|木箱/i.test(sku));
 
     return {
       row_id: canonicalRowId,

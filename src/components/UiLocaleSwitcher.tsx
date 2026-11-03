@@ -1,19 +1,31 @@
 "use client";
 
 import { useUiLocale } from "@/lib/i18n/UiLocaleContext";
-import type { UiLocale } from "@/lib/i18n/locale";
+import { UI_LOCALES, type UiLocale } from "@/lib/i18n/locale";
+
+const LABEL_KEY: Record<UiLocale, "spanish" | "english" | "chinese"> = {
+  es: "spanish",
+  en: "english",
+  zh: "chinese",
+};
 
 /**
- * Selector global del idioma de interfaz (Español / English).
+ * Selector global del idioma de interfaz (Español / English / 简体中文).
  * Visible en la cabecera tanto al inicio como durante la revisión.
  * Sin banderas, con estado comunicado (radiogroup + aria-checked),
  * teclado nativo y persistencia en localStorage (packmatch.uiLocale).
+ * Las flechas recorren los tres idiomas de forma cíclica.
  * No toca memoLang: ambos idiomas son independientes.
  */
 export function UiLocaleSwitcher({ id = "ui-locale" }: { id?: string }) {
   const { locale, setLocale, dict } = useUiLocale();
-  const options: UiLocale[] = ["es", "en"];
-  const labelFor = (l: UiLocale) => (l === "es" ? dict.header.spanish : dict.header.english);
+  const options: UiLocale[] = [...UI_LOCALES];
+  const labelFor = (l: UiLocale) => dict.header[LABEL_KEY[l]];
+
+  function stepLocale(from: UiLocale, delta: 1 | -1): UiLocale {
+    const idx = options.indexOf(from);
+    return options[(idx + delta + options.length) % options.length];
+  }
 
   return (
     <div
@@ -34,9 +46,14 @@ export function UiLocaleSwitcher({ id = "ui-locale" }: { id?: string }) {
             title={labelFor(l)}
             onClick={() => setLocale(l)}
             onKeyDown={(e) => {
-              if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+              if (e.key === "ArrowRight" || e.key === "ArrowDown") {
                 e.preventDefault();
-                const next: UiLocale = locale === "es" ? "en" : "es";
+                const next = stepLocale(locale, 1);
+                setLocale(next);
+                document.getElementById(`${id}-${next}`)?.focus();
+              } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const next = stepLocale(locale, -1);
                 setLocale(next);
                 document.getElementById(`${id}-${next}`)?.focus();
               }

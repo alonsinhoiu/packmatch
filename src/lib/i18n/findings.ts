@@ -69,6 +69,38 @@ export function shortFindingTitle(
         return `Note · ${f.sku}`;
     }
   }
+  if (locale === "zh") {
+    switch (f.code) {
+      case "QTY_MISMATCH": {
+        const inv = comparableQuantities(sum)?.invoiceQty ?? sum?.invoiceQty ?? invLine?.qty ?? 0;
+        const pl = sum?.packingTotalQty ?? 0;
+        const dQty = Math.abs(pl - inv);
+        return pl < inv
+          ? `短缺 ${fmtNumber.format(dQty)} 件 · ${f.sku}`
+          : `多出 ${fmtNumber.format(dQty)} 件 · ${f.sku}`;
+      }
+      case "INVOICE_LINE_MATH_ERROR":
+        return `金额错误 · ${f.sku}`;
+      case "WEIGHT_LOGIC_VIOLATION":
+        return `毛重小于净重 · ${f.sku}`;
+      case "TOTAL_GROSS_WEIGHT_MISMATCH":
+        return "总重不符";
+      case "UNIT_AMBIGUITY_UNCONVERTIBLE":
+        return `套件换算待确认 · ${f.sku}`;
+      case "SKU_IDENTIFIER_AMBIGUITY":
+        return `别名待确认 · ${f.sku}`;
+      case "UNDECLARED_ITEM_IN_PACKING_LIST":
+        return `未申报产品 · ${f.sku}`;
+      case "MISSING_ITEM_IN_PACKING_LIST":
+        return `装箱缺失 · ${f.sku}`;
+      case "CARTON_COUNT_MISMATCH":
+        return "箱数不符";
+      case "PACKING_ROW_MATH_ERROR":
+        return `箱数×数量错误 · ${f.sku}`;
+      default:
+        return `备注 · ${f.sku}`;
+    }
+  }
   switch (f.code) {
     case "QTY_MISMATCH": {
       const inv = comparableQuantities(sum)?.invoiceQty ?? sum?.invoiceQty ?? invLine?.qty ?? 0;
@@ -208,6 +240,102 @@ export function describeFinding(
       }
       default:
         return { title: `Note on ${f.sku}`, explanation: f.detail_en || f.detail, locationPills };
+    }
+  }
+
+  if (locale === "zh") {
+    switch (f.code) {
+      case "QTY_MISMATCH": {
+        const invQty = comparableQuantities(skuSum)?.invoiceQty ?? skuSum?.invoiceQty ?? invLine?.qty ?? 0;
+        const plQty = skuSum?.packingTotalQty ?? 0;
+        const diff = plQty - invQty;
+        const absDiff = Math.abs(diff);
+        const breakdown =
+          plRows.length > 1
+            ? `（${plRows.map((r) => `${r.total_qty} 件（${r.carton_range}）`).join(" + ")}）`
+            : plRows.length === 1
+              ? `（${plRows[0].carton_range}）`
+              : "";
+        return {
+          title:
+            diff < 0
+              ? `产品 ${f.sku} 装箱数量短缺 ${fmtNumber.format(absDiff)} 件`
+              : `产品 ${f.sku} 装箱数量多出 ${fmtNumber.format(absDiff)} 件`,
+          explanation: `发票开具 ${f.sku} ${fmtNumber.format(invQty)} 件${prodDesc}，但装箱单各箱合计${breakdown}为 ${fmtNumber.format(plQty)} 件。${skuSum?.conversionFactorUsed ? `已应用换算：1 套 = ${skuSum.conversionFactorUsed} 件。` : ""}`,
+          locationPills,
+        };
+      }
+      case "UNIT_AMBIGUITY_UNCONVERTIBLE": {
+        const invQty = invLine?.qty ?? skuSum?.invoiceQty ?? 0;
+        const plQty = skuSum?.packingTotalQty ?? 0;
+        return {
+          title: `产品 ${f.sku} 每套所含件数未知`,
+          explanation: `发票按 ${fmtNumber.format(invQty)} 套/组开具${prodDesc}，而仓库在各箱中点得散件 ${fmtNumber.format(plQty)} 件。由于没有任何单证注明每套内含件数，不能臆测换算。`,
+          locationPills,
+        };
+      }
+      case "INVOICE_LINE_MATH_ERROR": {
+        const qty = invLine?.qty ?? 0;
+        const price = invLine?.unit_price ?? 0;
+        const declared = invLine?.line_amount ?? 0;
+        const expected = qty * price;
+        return {
+          title: `产品 ${f.sku} 收费乘法错误`,
+          explanation: `发票按 ${fmtNumber.format(qty)} 件 × $${fmtCurrency.format(price)} 计算为 $${fmtCurrency.format(declared)}，正确结果应为 $${fmtCurrency.format(expected)}。`,
+          locationPills,
+        };
+      }
+      case "WEIGHT_LOGIC_VIOLATION": {
+        return {
+          title: `${f.sku} 重量异常：整箱毛重小于产品净重`,
+          explanation: `装箱单记录的毛重（含箱）小于净重（仅产品），海关系统将自动退单。`,
+          locationPills,
+        };
+      }
+      case "TOTAL_GROSS_WEIGHT_MISMATCH": {
+        return {
+          title: `各箱重量之和与申报总重不符`,
+          explanation: f.detail_en || f.detail,
+          locationPills,
+        };
+      }
+      case "SKU_IDENTIFIER_AMBIGUITY": {
+        return {
+          title: `产品编码在发票与装箱单上写法不一致`,
+          explanation: `发票上为“${f.sku}”，装箱单上为“${skuSum?.pairedPlSku || ""}”。数量相符，但两份单证必须使用完全相同的编码。`,
+          locationPills,
+        };
+      }
+      case "UNDECLARED_ITEM_IN_PACKING_LIST": {
+        return {
+          title: `箱内产品（${f.sku}）未在发票上申报`,
+          explanation: `装箱单列有“${f.sku}”，但商业发票上没有申报。即使是免费样品，依法也必须列入发票。`,
+          locationPills,
+        };
+      }
+      case "MISSING_ITEM_IN_PACKING_LIST": {
+        return {
+          title: `产品 ${f.sku} 已在发票上收费，但未出现在任何箱中`,
+          explanation: `发票开具“${f.sku}”${prodDesc}，但装箱单上没有该产品。`,
+          locationPills,
+        };
+      }
+      case "CARTON_COUNT_MISMATCH": {
+        return {
+          title: `申报总箱数与各行合计不符`,
+          explanation: f.detail_en || f.detail,
+          locationPills,
+        };
+      }
+      case "PACKING_ROW_MATH_ERROR": {
+        return {
+          title: `产品 ${f.sku} 箱数乘以单箱数量有误`,
+          explanation: f.detail_en || f.detail,
+          locationPills,
+        };
+      }
+      default:
+        return { title: `${f.sku} 的备注`, explanation: f.detail_en || f.detail, locationPills };
     }
   }
 

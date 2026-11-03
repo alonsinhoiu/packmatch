@@ -2,7 +2,7 @@
 
 ## Reproducible checks
 
-`npm run test:qa` runs 42 checks: 20 spreadsheet import cases, 5 comparison presentation cases, 8 workspace validation cases and 9 localization checks covering dictionary keys, interpolation, number formatting, persistence and localized messages.
+`npm run test:qa` runs 53 checks: 20 spreadsheet import cases, 5 comparison presentation cases, 8 workspace validation cases and 9 localization checks covering dictionary keys, interpolation, number formatting, persistence and localized messages, plus 11 multilingual extraction normalization checks using simulated responses.
 
 `npm run verify-parity` loads the seven synthetic fixture directories in `work/prueba-packmatch/cases/`, reconciles their ground truth inputs and compares findings by code, SKU and origin set. It then repeats the comparison using recorded extraction payloads in `work/prueba-packmatch/results/summary_api.json`. Finally it checks operator confirmation of the C06 conversion factor.
 

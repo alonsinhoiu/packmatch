@@ -77,7 +77,7 @@ function numeric(raw: string | undefined, label: PasteFieldLabel, locale: UiLoca
     if (fallback !== undefined) return fallback;
     throw new PasteError("MISSING_FIELD", msg(locale, (p) => p.missing, { label: labelText(locale, label) }));
   }
-  let value = raw.trim().replace(/^(?:USD|EUR|CLP)\s*/i, "").replace(/[$€£\s ]/g, "");
+  let value = raw.normalize("NFKC").trim().replace(/^(?:USD|EUR|CLP|CNY|RMB)\s*/i, "").replace(/[$€£¥\s 元块]/g, "");
   const comma = value.lastIndexOf(","), dot = value.lastIndexOf(".");
   if (comma >= 0 && dot >= 0) {
     value = comma > dot ? value.replace(/\./g, "").replace(",", ".") : value.replace(/,/g, "");
@@ -91,18 +91,28 @@ function numeric(raw: string | undefined, label: PasteFieldLabel, locale: UiLoca
 }
 const isNumeric = (raw: string | undefined, locale: UiLocale) => { try { numeric(raw, "labelQty", locale); return true; } catch { return false; } };
 const key = (s: string = "") => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-const skuHeader = (s: string) => ["sku", "producto", "codigo", "part", "item"].includes(key(s));
-const quantityHeader = (s: string) => ["cantidad", "qty", "quantity", "total", "totalunid", "totalqty"].includes(key(s));
+// Cabeceras en chino (los caracteres CJK no sobreviven a key(): se comparan en bruto).
+const ZH_SKU_HEADERS = ["产品", "编码", "型号", "品名", "料号", "货号", "物料"];
+const ZH_QTY_HEADERS = ["数量", "件数", "总数", "总量"];
+const ZH_PACKING_HEADERS = ["箱号", "箱数", "净重", "毛重", "重量", "托盘"];
+const hasZh = (s: string, words: string[]) => words.some((w) => s.includes(w));
+const skuHeader = (s: string) => ["sku", "producto", "codigo", "part", "item"].includes(key(s)) || hasZh(s, ZH_SKU_HEADERS);
+const quantityHeader = (s: string) => ["cantidad", "qty", "quantity", "total", "totalunid", "totalqty"].includes(key(s)) || hasZh(s, ZH_QTY_HEADERS);
 function qtyUnit(raw: string | undefined): string {
-  const s = (raw || "PCS").trim().toUpperCase();
+  const s = (raw || "PCS").normalize("NFKC").trim().toUpperCase();
   if (["PCS", "PC", "EA", "PZA", "PIEZA", "PIEZAS", "UND", "UN"].includes(s)) return "PCS";
   if (["SETS", "SET", "KIT", "KITS", "JUEGO", "JUEGOS"].includes(s)) return "SETS";
-  return s;
+  // Unidades contables inequívocas en chino; las ambiguas (箱) se copian verbatim.
+  if (["件", "个", "只", "台", "片", "支", "颗", "粒", "瓶", "袋"].includes(s)) return "PCS";
+  if (["套", "组"].includes(s)) return "SETS";
+  return s.normalize("NFKC").trim();
 }
 function weightUnit(raw: string | undefined, locale: UiLocale): string {
-  const s = (raw || "KG").trim().toUpperCase();
+  const s = (raw || "KG").normalize("NFKC").trim().toUpperCase();
   if (["LB", "LBS", "LIBRA", "LIBRAS"].includes(s)) return "LBS";
   if (["KG", "KGS", "KILOGRAMO", "KILOGRAMOS"].includes(s)) return "KG";
+  if (["千克", "公斤"].includes(s)) return "KG";
+  if (["磅", "英磅"].includes(s)) return "LBS";
   throw new PasteError("BAD_WEIGHT_UNIT", msg(locale, (p) => p.badWeightUnit, { value: raw ?? "" }));
 }
 
@@ -140,7 +150,7 @@ export function parseInvoicePaste(text: string, locale: UiLocale = "es"): Invoic
 export function parsePackingPaste(text: string, locale: UiLocale = "es"): PackingListRow[] {
   const out: PackingListRow[] = [];
   records(text, locale).forEach((c, idx) => {
-    if ((skuHeader(c[0]) || skuHeader(c[1])) && c.slice(1).some(x => quantityHeader(x) || ["cajas", "cartons", "neto", "bruto"].includes(key(x)))) return;
+    if ((skuHeader(c[0]) || skuHeader(c[1])) && c.slice(1).some(x => quantityHeader(x) || hasZh(x, ZH_PACKING_HEADERS) || ["cajas", "cartons", "neto", "bruto"].includes(key(x)))) return;
     try {
       if (c.length < 2 || c.length > 8 || !c[0]) throw new PasteError("PACKING_FORMAT", msg(locale, (p) => p.packingFormat));
       let sku = "", range = `CTN ${out.length + 1}`, cartons = 1, per = 0, total = 0, net = 0, gross = 0, unit = "KG";

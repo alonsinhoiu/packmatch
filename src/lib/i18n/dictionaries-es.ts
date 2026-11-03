@@ -20,6 +20,7 @@ export const es = {
     languageLabel: "Idioma de la interfaz",
     spanish: "Español",
     english: "English",
+    chinese: "简体中文",
   },
   stepper: {
     progressLabel: "Progreso del flujo de conciliación",

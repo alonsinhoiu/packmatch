@@ -44,8 +44,8 @@ La prueba de paridad detecta 13/13 hallazgos esperados en siete casos sintético
 
 PackMatch distingue el **idioma de la interfaz** del **idioma de la minuta**:
 
-- **Selector global (cabecera, “Español / English”)**: cambia toda la interfaz al instante —inicio, los cuatro pasos, diagnósticos, filtros, modales, validaciones y ayudas— sin reiniciar el caso, borrar archivos, perder ediciones, cambiar de paso, limpiar el registro del operador ni disparar una nueva extracción. Guarda la elección en `localStorage` (`packmatch.uiLocale`); sin preferencia válida usa español. Funciona con teclado (radiogroup con flechas) y anuncia el idioma activo. El parámetro `?lang=` no lo afecta.
-- **Selector del mensaje (paso 4 y panel lateral)**: cambia exclusivamente el contenido de la minuta (`memoLang`, conservando `?lang=en|es`). Puedes usar la interfaz en inglés y generar la minuta en español, y viceversa. Cambiar el idioma global nunca sobrescribe la minuta.
+- **Selector global (cabecera, “Español / English / 简体中文”)**: cambia toda la interfaz al instante —inicio, los cuatro pasos, diagnósticos, filtros, modales, validaciones y ayudas— sin reiniciar el caso, borrar archivos, perder ediciones, cambiar de paso, limpiar el registro del operador ni disparar una nueva extracción. Guarda la elección en `localStorage` (`packmatch.uiLocale`); sin preferencia válida usa español. Funciona con teclado (radiogroup con flechas) y anuncia el idioma activo. El parámetro `?lang=` no lo afecta.
+- **Selector del mensaje (paso 4 y panel lateral)**: cambia exclusivamente el contenido de la minuta (`memoLang`, conservando `?lang=en|es`). Puedes usar la interfaz en inglés o chino y generar la minuta en español, y viceversa. Las minutas siguen disponibles solo en español e inglés. Cambiar el idioma global nunca sobrescribe la minuta.
 
 Los números se presentan con `Intl.NumberFormat` (`es-CL` / `en-US`); la moneda real del documento se conserva y los datos ingresados no se reinterpretan. El contenido de los documentos, SKUs, identificadores y datos del usuario no se traducen.
 

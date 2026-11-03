@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { es } from '../src/lib/i18n/dictionaries-es.ts';
 import { en } from '../src/lib/i18n/dictionaries-en.ts';
+import { zh } from '../src/lib/i18n/dictionaries-zh.ts';
 import { formatTemplate } from '../src/lib/i18n/dictionaries.ts';
 import { formatCurrencyValue, formatNumberValue } from '../src/lib/i18n/format.ts';
 import { getStoredUiLocale, isUiLocale, persistUiLocale, resolveInitialUiLocale, UI_LOCALE_STORAGE_KEY } from '../src/lib/i18n/locale.ts';
@@ -21,8 +22,10 @@ function leafPaths(obj: unknown, prefix = ''): string[] {
 }
 const esPaths = leafPaths(es).sort();
 const enPaths = leafPaths(en).sort();
+const zhPaths = leafPaths(zh).sort();
 assert.deepEqual(enPaths, esPaths);
-ok('paridad de claves ES/EN en diccionarios');
+assert.deepEqual(zhPaths, esPaths);
+ok('paridad de claves ES/EN/ZH en diccionarios');
 
 // 2. Interpolaciones: mismo conjunto de {vars} en cada plantilla ES/EN
 const varsOf = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
@@ -43,7 +46,8 @@ function walk(a: unknown, b: unknown, path: string) {
   assert.fail(`tipos difieren en ${path}`);
 }
 walk(es, en, '');
-ok('interpolaciones {var} consistentes ES/EN');
+walk(es, zh, '');
+ok('interpolaciones {var} consistentes ES/EN/ZH');
 
 // 2b. formatTemplate sustituye todas las vars
 assert.equal(formatTemplate('Hola {name}, {count} cajas', { name: 'Ana', count: 2 }), 'Hola Ana, 2 cajas');
@@ -58,12 +62,15 @@ assert.ok(enFmt.includes(',') && enFmt.includes('.'), `en-US esperado, recibido 
 assert.equal(formatCurrencyValue('es', 1250.5), formatCurrencyValue('es', 1250.5));
 assert.ok(formatCurrencyValue('en', 1250.5).includes('1,250.50'));
 assert.ok(formatCurrencyValue('es', 1250.5).includes('1.250,50'));
-ok('formatos Intl es-CL/en-US correctos y sin conversión de moneda');
+assert.ok(formatCurrencyValue('zh', 1250.5).includes('1,250.50'), `zh-CN esperado, recibido ${formatCurrencyValue('zh', 1250.5)}`);
+assert.ok(formatNumberValue('zh', 1234.5) !== formatNumberValue('es', 1234.5));
+ok('formatos Intl es-CL/en-US/zh-CN correctos y sin conversión de moneda');
 
 // 4. Persistencia segura: defecto es, clave propia, sin lanzar si está bloqueado
 delete (globalThis as any).window;
 assert.equal(resolveInitialUiLocale(), 'es');
 assert.equal(isUiLocale('en'), true);
+assert.equal(isUiLocale('zh'), true);
 assert.equal(isUiLocale('fr'), false);
 (globalThis as any).window = { localStorage: { getItem: () => { throw new Error('bloqueado'); }, setItem: () => { throw new Error('bloqueado'); } } };
 assert.equal(getStoredUiLocale(), null);
@@ -75,9 +82,12 @@ const store = new Map<string, string>();
 persistUiLocale('en');
 assert.equal(store.get(UI_LOCALE_STORAGE_KEY), 'en');
 assert.equal(resolveInitialUiLocale(), 'en');
+persistUiLocale('zh');
+assert.equal(store.get(UI_LOCALE_STORAGE_KEY), 'zh');
+assert.equal(resolveInitialUiLocale(), 'zh');
 persistUiLocale('es');
 assert.equal(resolveInitialUiLocale(), 'es');
-ok('persistencia en packmatch.uiLocale + lectura');
+ok('persistencia en packmatch.uiLocale + lectura (es/en/zh)');
 delete (globalThis as any).window;
 
 // 5. Validaciones localizadas con códigos estables
@@ -104,8 +114,11 @@ ok('paste-import lanza PasteError con code + mensaje ES/EN');
 
 // 7. Etiquetas de hallazgo traducidas, códigos internos intactos
 assert.notEqual(shortFindingLabel('QTY_MISMATCH', 'es'), shortFindingLabel('QTY_MISMATCH', 'en'));
+assert.notEqual(shortFindingLabel('QTY_MISMATCH', 'es'), shortFindingLabel('QTY_MISMATCH', 'zh'));
+assert.ok(/[\u4e00-\u9fff]/.test(shortFindingLabel('QTY_MISMATCH', 'zh')));
 assert.equal(shortFindingLabel('UNKNOWN_CODE' as any, 'en'), 'Note');
 assert.equal(shortFindingLabel('UNKNOWN_CODE' as any, 'es'), 'Observación');
-ok('finding labels ES/EN con códigos estables');
+assert.equal(shortFindingLabel('UNKNOWN_CODE' as any, 'zh'), '备注');
+ok('finding labels ES/EN/ZH con códigos estables');
 
 console.log(`${passes}/${passes} pruebas superadas`);

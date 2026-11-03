@@ -22,6 +22,7 @@ export const en: Dictionary = {
     languageLabel: "Interface language",
     spanish: "Español",
     english: "English",
+    chinese: "简体中文",
   },
   stepper: {
     progressLabel: "Reconciliation workflow progress",

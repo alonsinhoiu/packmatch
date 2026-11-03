@@ -210,7 +210,7 @@ function DropZone({
 function PackMatchWorkbench() {
   const { locale, dict } = useUiLocale();
   const { fmtCurrency, fmtNumber } = useMemo(() => getLocaleFormatters(locale), [locale]);
-  const pluralS = (n: number) => (n === 1 ? "" : "s");
+  const pluralS = (_n: number) => (locale === "zh" ? "" : _n === 1 ? "" : "s");
   // El espacio de trabajo arranca vacío ("desde ceros"): el usuario elige cómo
   // ingresar su embarque en el Hub de Entrada Tri-Modal.
   const [shipmentMode, setShipmentMode] = useState<ShipmentMode>("empty");
@@ -856,7 +856,9 @@ function PackMatchWorkbench() {
   ];
   const discPlural = locale === "en"
     ? discrepanciesCount === 1 ? "y" : "ies"
-    : pluralS(discrepanciesCount);
+    : locale === "zh"
+      ? ""
+      : pluralS(discrepanciesCount);
 
   const editableTables = (
     <div className="bg-white rounded-2xl border border-(--pm-border) overflow-hidden">

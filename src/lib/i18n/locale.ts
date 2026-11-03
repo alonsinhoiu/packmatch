@@ -1,11 +1,11 @@
-export type UiLocale = "es" | "en";
+export type UiLocale = "es" | "en" | "zh";
 
 export const UI_LOCALE_STORAGE_KEY = "packmatch.uiLocale";
 
-export const UI_LOCALES: UiLocale[] = ["es", "en"];
+export const UI_LOCALES: UiLocale[] = ["es", "en", "zh"];
 
 export function isUiLocale(value: unknown): value is UiLocale {
-  return value === "es" || value === "en";
+  return value === "es" || value === "en" || value === "zh";
 }
 
 function readStorage(): string | null {
@@ -38,5 +38,7 @@ export function persistUiLocale(locale: UiLocale): void {
 }
 
 export function uiLocaleToIntl(locale: UiLocale): string {
-  return locale === "en" ? "en-US" : "es-CL";
+  if (locale === "en") return "en-US";
+  if (locale === "zh") return "zh-CN";
+  return "es-CL";
 }
