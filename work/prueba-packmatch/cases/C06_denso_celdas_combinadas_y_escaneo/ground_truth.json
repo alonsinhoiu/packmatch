@@ -1,0 +1,383 @@
+{
+  "case_id": "C06_denso_celdas_combinadas_y_escaneo",
+  "description": "Caso denso con escaneo ligero (6 SKUs en factura, 11 filas en Packing List con SKUs intercalados en distintas tarimas, 1 discrepancia sutil de -6 PCS en SKU-804 repartido en 3 filas no contiguas y 1 ambiguedad SETS vs PCS sin factor en SKU-806).",
+  "scan_degrade": true,
+  "invoice": {
+    "invoice_no": "INV-2026-606",
+    "incoterm": "FOB SHANGHAI",
+    "currency": "USD",
+    "declared_total_amount": 18420.0,
+    "declared_total_net_kg": 642.0,
+    "declared_total_gross_kg": 706.0,
+    "declared_total_cartons": 28,
+    "notes": [
+      "Multi-pallet consolidated order PO#9921."
+    ],
+    "lines": [
+      {
+        "line_id": "INV-L1",
+        "sku": "SKU-801",
+        "description": "DIN Rail Power Supply 24V",
+        "qty": 180,
+        "unit": "PCS",
+        "unit_price": 25.0,
+        "line_amount": 4500.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          294,
+          41,
+          357,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L2",
+        "sku": "SKU-802",
+        "description": "Relay Socket Base 8-Pin",
+        "qty": 400,
+        "unit": "PCS",
+        "unit_price": 4.5,
+        "line_amount": 1800.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          357,
+          41,
+          420,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L3",
+        "sku": "SKU-803",
+        "description": "Contactor 3P 32A",
+        "qty": 150,
+        "unit": "PCS",
+        "unit_price": 28.0,
+        "line_amount": 4200.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          420,
+          41,
+          483,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L4",
+        "sku": "SKU-804",
+        "description": "Circuit Breaker MCB 2P 16A",
+        "qty": 320,
+        "unit": "PCS",
+        "unit_price": 9.0,
+        "line_amount": 2880.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          483,
+          41,
+          546,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L5",
+        "sku": "SKU-805",
+        "description": "Terminal Block Kit (1 SET = 10 PCS)",
+        "qty": 120,
+        "unit": "SETS",
+        "unit_price": 18.0,
+        "line_amount": 2160.0,
+        "explicit_pcs_per_set": 10,
+        "bbox": [
+          546,
+          41,
+          610,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L6",
+        "sku": "SKU-806",
+        "description": "Cable Gland Assortment Box",
+        "qty": 90,
+        "unit": "SETS",
+        "unit_price": 32.0,
+        "line_amount": 2880.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          610,
+          41,
+          673,
+          959
+        ]
+      }
+    ],
+    "header_bbox": [
+      123,
+      41,
+      204,
+      959
+    ]
+  },
+  "packing_list": {
+    "packing_list_no": "PL-2026-606",
+    "incoterm": "FOB SHANGHAI",
+    "declared_total_cartons": 28,
+    "declared_total_net_kg": 642.0,
+    "declared_total_gross_kg": 706.0,
+    "notes": [
+      "Pallet 1: CTN 1-14 | Pallet 2: CTN 15-28"
+    ],
+    "rows": [
+      {
+        "row_id": "PL-R1",
+        "carton_range": "1-4",
+        "carton_count": 4,
+        "sku": "SKU-801",
+        "qty_per_carton": 30,
+        "total_qty": 120,
+        "unit": "PCS",
+        "net_weight": 72.0,
+        "gross_weight": 80.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          223,
+          43,
+          271,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R2",
+        "carton_range": "5-8",
+        "carton_count": 4,
+        "sku": "SKU-802",
+        "qty_per_carton": 50,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 40.0,
+        "gross_weight": 44.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          271,
+          43,
+          319,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R3",
+        "carton_range": "9-11",
+        "carton_count": 3,
+        "sku": "SKU-804",
+        "qty_per_carton": 40,
+        "total_qty": 120,
+        "unit": "PCS",
+        "net_weight": 48.0,
+        "gross_weight": 53.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          319,
+          43,
+          367,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R4",
+        "carton_range": "12-14",
+        "carton_count": 3,
+        "sku": "SKU-803",
+        "qty_per_carton": 30,
+        "total_qty": 90,
+        "unit": "PCS",
+        "net_weight": 81.0,
+        "gross_weight": 89.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          367,
+          43,
+          415,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R5",
+        "carton_range": "15-16",
+        "carton_count": 2,
+        "sku": "SKU-801",
+        "qty_per_carton": 30,
+        "total_qty": 60,
+        "unit": "PCS",
+        "net_weight": 36.0,
+        "gross_weight": 40.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          415,
+          43,
+          463,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R6",
+        "carton_range": "17-19",
+        "carton_count": 3,
+        "sku": "SKU-804",
+        "qty_per_carton": 40,
+        "total_qty": 120,
+        "unit": "PCS",
+        "net_weight": 48.0,
+        "gross_weight": 53.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          463,
+          43,
+          511,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R7",
+        "carton_range": "20-23",
+        "carton_count": 4,
+        "sku": "SKU-805",
+        "qty_per_carton": 300,
+        "total_qty": 1200,
+        "unit": "PCS",
+        "net_weight": 110.0,
+        "gross_weight": 122.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": 10,
+        "bbox": [
+          511,
+          43,
+          559,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R8",
+        "carton_range": "24-25",
+        "carton_count": 2,
+        "sku": "SKU-803",
+        "qty_per_carton": 30,
+        "total_qty": 60,
+        "unit": "PCS",
+        "net_weight": 54.0,
+        "gross_weight": 59.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          559,
+          43,
+          607,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R9",
+        "carton_range": "26-27",
+        "carton_count": 2,
+        "sku": "SKU-804",
+        "qty_per_carton": 37,
+        "total_qty": 74,
+        "unit": "PCS",
+        "net_weight": 30.0,
+        "gross_weight": 33.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          607,
+          43,
+          655,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R10",
+        "carton_range": "27-27",
+        "carton_count": 0,
+        "sku": "SKU-802",
+        "qty_per_carton": 200,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 38.0,
+        "gross_weight": 42.0,
+        "weight_unit": "KG",
+        "shared_carton": true,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          655,
+          43,
+          703,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R11",
+        "carton_range": "28-28",
+        "carton_count": 1,
+        "sku": "SKU-806",
+        "qty_per_carton": 450,
+        "total_qty": 450,
+        "unit": "PCS",
+        "net_weight": 85.0,
+        "gross_weight": 91.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          703,
+          43,
+          751,
+          957
+        ]
+      }
+    ],
+    "header_bbox": [
+      93,
+      43,
+      155,
+      957
+    ]
+  },
+  "expected_findings": [
+    {
+      "code": "QTY_MISMATCH",
+      "severity": "DISCREPANCY",
+      "sku": "SKU-804",
+      "origins": [
+        "INV-L4",
+        "PL-R3",
+        "PL-R6",
+        "PL-R9"
+      ],
+      "detail": "Invoice declares 320 PCS of SKU-804, but Packing List rows PL-R3 (120) + PL-R6 (120) + PL-R9 (74) sum to 314 PCS (diff -6 PCS)."
+    },
+    {
+      "code": "UNIT_AMBIGUITY_UNCONVERTIBLE",
+      "severity": "AMBIGUITY",
+      "sku": "SKU-806",
+      "origins": [
+        "INV-L6",
+        "PL-R11"
+      ],
+      "detail": "SKU-806 is billed as 90 SETS on INV-L6 and packed as 450 PCS on PL-R11 without an explicit conversion factor."
+    }
+  ]
+}

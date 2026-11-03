@@ -1,0 +1,192 @@
+{
+  "case_id": "C01_correcto_asimetrico",
+  "description": "Caso correcto con estructuras distintas: SKU-101 partido en dos rangos de cajas y SKU-303 facturado en SETS y empacado en PCS con factor explicito (1 SET = 2 PCS).",
+  "invoice": {
+    "invoice_no": "INV-2026-101",
+    "incoterm": "FOB SHENZHEN",
+    "currency": "USD",
+    "declared_total_amount": 6460.0,
+    "declared_total_net_kg": 310.0,
+    "declared_total_gross_kg": 345.0,
+    "declared_total_cartons": 15,
+    "notes": [
+      "Payment terms: 30 days net. Country of Origin: CN."
+    ],
+    "lines": [
+      {
+        "line_id": "INV-L1",
+        "sku": "SKU-101",
+        "description": "Industrial Sensor Module A",
+        "qty": 230,
+        "unit": "PCS",
+        "unit_price": 12.0,
+        "line_amount": 2760.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          362,
+          41,
+          440,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L2",
+        "sku": "SKU-202",
+        "description": "Shielded Control Cable 5m",
+        "qty": 120,
+        "unit": "PCS",
+        "unit_price": 15.0,
+        "line_amount": 1800.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          440,
+          41,
+          518,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L3",
+        "sku": "SKU-303",
+        "description": "Mounting Bracket Kit (1 SET = 2 PCS)",
+        "qty": 50,
+        "unit": "SETS",
+        "unit_price": 38.0,
+        "line_amount": 1900.0,
+        "explicit_pcs_per_set": 2,
+        "bbox": [
+          518,
+          41,
+          596,
+          959
+        ]
+      }
+    ],
+    "header_bbox": [
+      151,
+      41,
+      252,
+      959
+    ]
+  },
+  "packing_list": {
+    "packing_list_no": "PL-2026-101",
+    "incoterm": "FOB SHENZHEN",
+    "declared_total_cartons": 15,
+    "declared_total_net_kg": 310.0,
+    "declared_total_gross_kg": 345.0,
+    "notes": [
+      "Export standard wooden palletized cartons."
+    ],
+    "rows": [
+      {
+        "row_id": "PL-R1",
+        "carton_range": "1-5",
+        "carton_count": 5,
+        "sku": "SKU-101",
+        "qty_per_carton": 40,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 100.0,
+        "gross_weight": 110.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          313,
+          43,
+          381,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R2",
+        "carton_range": "6-8",
+        "carton_count": 3,
+        "sku": "SKU-202",
+        "qty_per_carton": 40,
+        "total_qty": 120,
+        "unit": "PCS",
+        "net_weight": 90.0,
+        "gross_weight": 100.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          381,
+          43,
+          448,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R3",
+        "carton_range": "9-10",
+        "carton_count": 2,
+        "sku": "SKU-303",
+        "qty_per_carton": 50,
+        "total_qty": 100,
+        "unit": "PCS",
+        "net_weight": 45.0,
+        "gross_weight": 52.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": 2,
+        "bbox": [
+          448,
+          43,
+          516,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R4",
+        "carton_range": "11-11",
+        "carton_count": 1,
+        "sku": "SKU-101",
+        "qty_per_carton": 30,
+        "total_qty": 30,
+        "unit": "PCS",
+        "net_weight": 15.0,
+        "gross_weight": 17.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          516,
+          43,
+          583,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R5",
+        "carton_range": "12-15",
+        "carton_count": 4,
+        "sku": "SPARE-FOAM",
+        "qty_per_carton": 0,
+        "total_qty": 0,
+        "unit": "PCS",
+        "net_weight": 60.0,
+        "gross_weight": 66.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "is_packaging_only": true,
+        "bbox": [
+          583,
+          43,
+          651,
+          957
+        ]
+      }
+    ],
+    "header_bbox": [
+      131,
+      43,
+      218,
+      957
+    ]
+  },
+  "expected_findings": []
+}

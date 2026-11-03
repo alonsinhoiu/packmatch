@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" role="img" aria-labelledby="title desc">
+<title id="title">PackMatch — Every shipment tells two stories. Make them match.</title><desc id="desc">Invoice and packing list reconciliation, powered by Meta AI and deterministic TypeScript rules.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#142c38"/><stop offset="1" stop-color="#244e50"/></linearGradient><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#86b6ac" stroke-opacity=".08"/></pattern></defs>
+<rect width="1280" height="520" rx="24" fill="url(#bg)"/><rect width="1280" height="520" rx="24" fill="url(#grid)"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<g fill="none" stroke="#f7f8f6" stroke-width="4"><path d="M84 57H68V94H84V88"/><path d="M92 100H108V63H92V69"/><path d="M80 75H96M80 83H96" stroke="#86b6ac"/></g>
+<text x="130" y="91" fill="#f7f8f6" font-size="34" font-weight="700" letter-spacing="-1">PackMatch</text>
+<text x="64" y="159" fill="#a6d3c7" font-size="12" font-weight="700" letter-spacing="3">DOCUMENT INTELLIGENCE / GLOBAL TRADE</text>
+<text x="64" y="230" fill="#f7f8f6" font-size="48" font-weight="700" letter-spacing="-2">Every shipment tells</text><text x="64" y="288" fill="#f7f8f6" font-size="48" font-weight="700" letter-spacing="-2">two stories.</text><text x="64" y="346" fill="#a6d3c7" font-size="48" font-weight="700" letter-spacing="-2">Make them match.</text>
+<text x="64" y="403" fill="#c0d1d2" font-size="17">Meta AI reads the documents. Code checks the facts.</text>
+<rect x="64" y="447" width="185" height="30" rx="15" fill="#ffffff" fill-opacity=".08"/><text x="80" y="467" fill="#c8e4dc" font-size="11" letter-spacing="1">OPEN SOURCE · BUILT IN CHILE</text>
+<g transform="translate(760 116)">
+<rect x="0" y="0" width="210" height="245" rx="14" fill="#f7f8f6"/><text x="22" y="36" fill="#193440" font-size="12" font-weight="700" letter-spacing="1">COMMERCIAL INVOICE</text>
+<g stroke="#d4dedd" stroke-width="6"><path d="M22 65H150M22 90H185M22 115H185M22 140H185M22 165H185M22 190H132"/></g>
+<rect x="14" y="103" width="182" height="26" rx="4" fill="#dbece5" stroke="#3c8173" stroke-width="2"/><text x="24" y="120" fill="#245d50" font-size="11" font-weight="700">SKU-402 · 100 PCS</text>
+<rect x="180" y="75" width="210" height="245" rx="14" fill="#ffffff" stroke="#d4dedd"/><text x="202" y="111" fill="#193440" font-size="12" font-weight="700" letter-spacing="1">PACKING LIST</text>
+<g stroke="#d4dedd" stroke-width="6"><path d="M202 140H338M202 165H365M202 190H365M202 215H365M202 240H365M202 265H326"/></g>
+<rect x="194" y="178" width="182" height="26" rx="4" fill="#fae9e3" stroke="#b8654c" stroke-width="2"/><text x="204" y="195" fill="#914530" font-size="11" font-weight="700">SKU-402 · 80 PCS</text>
+<path d="M110 130V280H180" fill="none" stroke="#a6d3c7" stroke-width="2" stroke-dasharray="5 5"/>
+<rect x="-10" y="337" width="360" height="45" rx="10" fill="#86b6ac"/><text x="12" y="365" fill="#142c38" font-size="13" font-weight="700">QUANTITY MISMATCH</text><text x="272" y="365" fill="#142c38" font-size="13" font-weight="700">−20 PCS</text>
+</g></g></svg>

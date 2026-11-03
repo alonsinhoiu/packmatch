@@ -1,0 +1,173 @@
+{
+  "case_id": "C03_discrepancia_pesos_y_lbs",
+  "description": "Discrepancias de peso sin notas de pista: (1) En PL-R2 el peso bruto (108 KG) es menor que el peso neto (120 KG); (2) Tras convertir PL-R3 de LBS a KG, el peso bruto total suma 338.0 KG pero la Factura y cabecera declaran 355.0 KG.",
+  "invoice": {
+    "invoice_no": "INV-2026-303",
+    "incoterm": "FOB NINGBO",
+    "currency": "USD",
+    "declared_total_amount": 4200.0,
+    "declared_total_net_kg": 310.0,
+    "declared_total_gross_kg": 355.0,
+    "declared_total_cartons": 10,
+    "notes": [
+      "Carrier booking ref: NGB-88412."
+    ],
+    "lines": [
+      {
+        "line_id": "INV-L1",
+        "sku": "SKU-501",
+        "description": "Steel Flange DN50",
+        "qty": 100,
+        "unit": "PCS",
+        "unit_price": 14.0,
+        "line_amount": 1400.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          362,
+          41,
+          440,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L2",
+        "sku": "SKU-502",
+        "description": "Steel Flange DN80",
+        "qty": 80,
+        "unit": "PCS",
+        "unit_price": 20.0,
+        "line_amount": 1600.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          440,
+          41,
+          518,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L3",
+        "sku": "SKU-503",
+        "description": "Gasket Ring Pack",
+        "qty": 200,
+        "unit": "PCS",
+        "unit_price": 6.0,
+        "line_amount": 1200.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          518,
+          41,
+          596,
+          959
+        ]
+      }
+    ],
+    "header_bbox": [
+      151,
+      41,
+      252,
+      959
+    ]
+  },
+  "packing_list": {
+    "packing_list_no": "PL-2026-303",
+    "incoterm": "FOB NINGBO",
+    "declared_total_cartons": 10,
+    "declared_total_net_kg": 310.0,
+    "declared_total_gross_kg": 355.0,
+    "notes": [
+      "Container Tare verified at gate."
+    ],
+    "rows": [
+      {
+        "row_id": "PL-R1",
+        "carton_range": "1-4",
+        "carton_count": 4,
+        "sku": "SKU-501",
+        "qty_per_carton": 25,
+        "total_qty": 100,
+        "unit": "PCS",
+        "net_weight": 90.0,
+        "gross_weight": 120.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          362,
+          43,
+          440,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R2",
+        "carton_range": "5-8",
+        "carton_count": 4,
+        "sku": "SKU-502",
+        "qty_per_carton": 20,
+        "total_qty": 80,
+        "unit": "PCS",
+        "net_weight": 120.0,
+        "gross_weight": 108.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          440,
+          43,
+          518,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R3",
+        "carton_range": "9-10",
+        "carton_count": 2,
+        "sku": "SKU-503",
+        "qty_per_carton": 100,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 220.46,
+        "gross_weight": 242.51,
+        "weight_unit": "LBS",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          518,
+          43,
+          596,
+          957
+        ]
+      }
+    ],
+    "header_bbox": [
+      151,
+      43,
+      252,
+      957
+    ]
+  },
+  "expected_findings": [
+    {
+      "code": "WEIGHT_LOGIC_VIOLATION",
+      "severity": "DISCREPANCY",
+      "sku": "SKU-502",
+      "origins": [
+        "PL-R2"
+      ],
+      "detail": "Row PL-R2 has Gross Weight (108.0 KG) < Net Weight (120.0 KG)."
+    },
+    {
+      "code": "TOTAL_GROSS_WEIGHT_MISMATCH",
+      "severity": "DISCREPANCY",
+      "sku": "ALL",
+      "origins": [
+        "INV-HEADER",
+        "PL-R1",
+        "PL-R2",
+        "PL-R3"
+      ],
+      "detail": "Sum of row gross weights in KG (338.0 KG) does not match declared total gross weight (355.0 KG)."
+    }
+  ]
+}

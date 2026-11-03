@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  /* PackMatch approved tokens */
+  --pm-ink: #172E3B;
+  --pm-dark-surface: #213C47;
+  --pm-dark-border: #35505A;
+  --pm-paper: #F7F8F6;
+  --pm-panel: #FFFFFF;
+  --pm-text-secondary: #5C6D73;
+  --pm-border: #DCE3DF;
+  --pm-primary: #356F65;
+  --pm-primary-hover: #2B5D54;
+  --pm-sage: #86B6AC;
+  --pm-selection: #EDF3EF;
+  --pm-error: #A34D43;
+  --pm-error-bg: #F8EFEC;
+  --pm-warning-text: #7A5A12;
+  --pm-warning-bg: #FFF8E6;
+  --pm-warning-border: #E3C878;
+  --pm-dark-secondary: #B8CCC9;
+  --pm-dark-raised: #2A4A55;
+  --pm-dark-dashed: #4A6572;
+  --pm-dark-inset: #1E3844;
+  --pm-error-border: #E8CFC9;
+  --pm-highlight: #F2C14E;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+body {
+  background-color: var(--pm-paper);
+  color: var(--pm-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+table, input[type="number"], .tabular-nums, .font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.btn-press {
+  transition: transform 150ms var(--ease-out), background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+.btn-press:active:not(:disabled) { transform: scale(0.97); }
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+  outline: 2px solid var(--pm-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn-press:active:not(:disabled) { transform: none !important; }
+}
+
+.pm-brand { display: inline-flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.pm-brand-image { display: block; max-width: 100%; }
+.pm-brand-tagline { font-size: 11px; letter-spacing: .02em; }
+@media (prefers-color-scheme: dark) {
+  .pm-brand-auto .pm-brand-image { filter: brightness(0) invert(1); }
+  .pm-brand-auto .pm-brand-tagline { color: #cbd5e1; }
+}

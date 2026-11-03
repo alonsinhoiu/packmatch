@@ -1,0 +1,177 @@
+{
+  "case_id": "C02_discrepancia_cantidad_y_subtotal",
+  "description": "Discrepancias introducidas sin notas de pista: (1) SKU-401 facturado por 500 PCS pero suma 480 PCS en 3 rangos de cajas del Packing List; (2) error aritmetico en linea INV-L2 (100 x 12.50 != 1350.00).",
+  "invoice": {
+    "invoice_no": "INV-2026-202",
+    "incoterm": "CIF VALPARAISO",
+    "currency": "USD",
+    "declared_total_amount": 6350.0,
+    "declared_total_net_kg": 290.0,
+    "declared_total_gross_kg": 320.0,
+    "declared_total_cartons": 12,
+    "notes": [
+      "Standard export commercial invoice."
+    ],
+    "lines": [
+      {
+        "line_id": "INV-L1",
+        "sku": "SKU-401",
+        "description": "Hydraulic Valve 1/2 inch",
+        "qty": 500,
+        "unit": "PCS",
+        "unit_price": 10.0,
+        "line_amount": 5000.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          393,
+          41,
+          478,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L2",
+        "sku": "SKU-402",
+        "description": "Pressure Gauge 0-10 Bar",
+        "qty": 100,
+        "unit": "PCS",
+        "unit_price": 12.5,
+        "line_amount": 1350.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          478,
+          41,
+          562,
+          959
+        ]
+      }
+    ],
+    "header_bbox": [
+      164,
+      41,
+      274,
+      959
+    ]
+  },
+  "packing_list": {
+    "packing_list_no": "PL-2026-202",
+    "incoterm": "CIF VALPARAISO",
+    "declared_total_cartons": 12,
+    "declared_total_net_kg": 290.0,
+    "declared_total_gross_kg": 320.0,
+    "notes": [
+      "Warehouse tally verified prior to container seal."
+    ],
+    "rows": [
+      {
+        "row_id": "PL-R1",
+        "carton_range": "1-4",
+        "carton_count": 4,
+        "sku": "SKU-401",
+        "qty_per_carton": 50,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 100.0,
+        "gross_weight": 110.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          336,
+          43,
+          409,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R2",
+        "carton_range": "5-8",
+        "carton_count": 4,
+        "sku": "SKU-401",
+        "qty_per_carton": 50,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 100.0,
+        "gross_weight": 110.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          409,
+          43,
+          481,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R3",
+        "carton_range": "9-10",
+        "carton_count": 2,
+        "sku": "SKU-401",
+        "qty_per_carton": 40,
+        "total_qty": 80,
+        "unit": "PCS",
+        "net_weight": 40.0,
+        "gross_weight": 45.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          481,
+          43,
+          553,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R4",
+        "carton_range": "11-12",
+        "carton_count": 2,
+        "sku": "SKU-402",
+        "qty_per_carton": 50,
+        "total_qty": 100,
+        "unit": "PCS",
+        "net_weight": 50.0,
+        "gross_weight": 55.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          553,
+          43,
+          626,
+          957
+        ]
+      }
+    ],
+    "header_bbox": [
+      140,
+      43,
+      234,
+      957
+    ]
+  },
+  "expected_findings": [
+    {
+      "code": "QTY_MISMATCH",
+      "severity": "DISCREPANCY",
+      "sku": "SKU-401",
+      "origins": [
+        "INV-L1",
+        "PL-R1",
+        "PL-R2",
+        "PL-R3"
+      ],
+      "detail": "Invoice declares 500 PCS but Packing List sum is 480 PCS (diff -20 PCS)."
+    },
+    {
+      "code": "INVOICE_LINE_MATH_ERROR",
+      "severity": "DISCREPANCY",
+      "sku": "SKU-402",
+      "origins": [
+        "INV-L2"
+      ],
+      "detail": "Invoice line INV-L2 qty 100 * unit_price 12.50 = 1250.00, but line_amount is 1350.00."
+    }
+  ]
+}

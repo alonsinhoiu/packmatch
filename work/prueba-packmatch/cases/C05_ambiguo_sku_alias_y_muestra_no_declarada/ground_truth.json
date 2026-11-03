@@ -1,0 +1,178 @@
+{
+  "case_id": "C05_ambiguo_sku_alias_y_muestra_no_declarada",
+  "description": "Caso mixto sin notas de pista: SKU-901 aparece como SKU-901-REV2 en el Packing List (ambiguedad de codigo con misma cantidad 300 PCS), y la caja CTN 10 incluye 20 PCS de SKU-999-PROMO omitidas en la Factura Comercial.",
+  "invoice": {
+    "invoice_no": "INV-2026-505",
+    "incoterm": "FOB QINGDAO",
+    "currency": "USD",
+    "declared_total_amount": 5250.0,
+    "declared_total_net_kg": 210.0,
+    "declared_total_gross_kg": 234.0,
+    "declared_total_cartons": 9,
+    "notes": [
+      "HS Code Group: 8536.90"
+    ],
+    "lines": [
+      {
+        "line_id": "INV-L1",
+        "sku": "SKU-901",
+        "description": "Optical Terminal Box",
+        "qty": 300,
+        "unit": "PCS",
+        "unit_price": 12.5,
+        "line_amount": 3750.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          393,
+          41,
+          478,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L2",
+        "sku": "SKU-902",
+        "description": "Fiber Splice Tray",
+        "qty": 150,
+        "unit": "PCS",
+        "unit_price": 10.0,
+        "line_amount": 1500.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          478,
+          41,
+          562,
+          959
+        ]
+      }
+    ],
+    "header_bbox": [
+      164,
+      41,
+      274,
+      959
+    ]
+  },
+  "packing_list": {
+    "packing_list_no": "PL-2026-505",
+    "incoterm": "FOB QINGDAO",
+    "declared_total_cartons": 10,
+    "declared_total_net_kg": 215.0,
+    "declared_total_gross_kg": 240.0,
+    "notes": [
+      "Shipment ready for loading."
+    ],
+    "rows": [
+      {
+        "row_id": "PL-R1",
+        "carton_range": "1-6",
+        "carton_count": 6,
+        "sku": "SKU-901-REV2",
+        "qty_per_carton": 50,
+        "total_qty": 300,
+        "unit": "PCS",
+        "net_weight": 150.0,
+        "gross_weight": 168.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          362,
+          43,
+          440,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R2",
+        "carton_range": "7-9",
+        "carton_count": 3,
+        "sku": "SKU-902",
+        "qty_per_carton": 50,
+        "total_qty": 150,
+        "unit": "PCS",
+        "net_weight": 60.0,
+        "gross_weight": 66.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          440,
+          43,
+          518,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R3",
+        "carton_range": "10-10",
+        "carton_count": 1,
+        "sku": "SKU-999-PROMO",
+        "qty_per_carton": 20,
+        "total_qty": 20,
+        "unit": "PCS",
+        "net_weight": 5.0,
+        "gross_weight": 6.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          518,
+          43,
+          596,
+          957
+        ]
+      }
+    ],
+    "header_bbox": [
+      151,
+      43,
+      252,
+      957
+    ]
+  },
+  "expected_findings": [
+    {
+      "code": "SKU_IDENTIFIER_AMBIGUITY",
+      "severity": "AMBIGUITY",
+      "sku": "SKU-901",
+      "origins": [
+        "INV-L1",
+        "PL-R1"
+      ],
+      "detail": "SKU prefix matches (SKU-901 vs SKU-901-REV2, both 300 PCS), but revision suffix differs without explicit equivalence note."
+    },
+    {
+      "code": "UNDECLARED_ITEM_IN_PACKING_LIST",
+      "severity": "DISCREPANCY",
+      "sku": "SKU-999-PROMO",
+      "origins": [
+        "PL-R3"
+      ],
+      "detail": "SKU-999-PROMO (20 PCS in CTN 10-10) is packed in the shipment but missing from the Commercial Invoice."
+    },
+    {
+      "code": "CARTON_COUNT_MISMATCH",
+      "severity": "DISCREPANCY",
+      "sku": "ALL",
+      "origins": [
+        "INV-HEADER",
+        "PL-HEADER",
+        "PL-R3"
+      ],
+      "detail": "Invoice declares 9 cartons while Packing List has 10 cartons."
+    },
+    {
+      "code": "TOTAL_GROSS_WEIGHT_MISMATCH",
+      "severity": "DISCREPANCY",
+      "sku": "ALL",
+      "origins": [
+        "INV-HEADER",
+        "PL-R1",
+        "PL-R2",
+        "PL-R3"
+      ],
+      "detail": "Invoice declares 234.00 KG gross weight while Packing List totals 240.00 KG."
+    }
+  ]
+}

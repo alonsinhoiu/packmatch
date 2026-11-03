@@ -1,0 +1,33 @@
+# Local credentials (only the empty example is published)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and build output
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.netlify/
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Private working notes, raw media and generated iterations
+outputs/
+video_workspace/
+*.mp4
+work/*
+!work/prueba-packmatch/
+work/prueba-packmatch/*
+!work/prueba-packmatch/cases/
+!work/prueba-packmatch/results/
+work/prueba-packmatch/results/*
+!work/prueba-packmatch/results/summary_api.json
+# Local transcription of event rules; not an authoritative source
+docs/pautas-evaluacion-meta-hackathon-2026.md

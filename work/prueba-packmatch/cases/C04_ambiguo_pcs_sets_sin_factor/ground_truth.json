@@ -1,0 +1,162 @@
+{
+  "case_id": "C04_ambiguo_pcs_sets_sin_factor",
+  "description": "Caso ambiguo SIN nota de aviso: SKU-701 facturado como 60 SETS y empacado como 240 PCS sin factor explicito en ninguna parte. Prohibido asumir 1 SET = 4 PCS.",
+  "invoice": {
+    "invoice_no": "INV-2026-404",
+    "incoterm": "EXW SHANGHAI",
+    "currency": "USD",
+    "declared_total_amount": 3900.0,
+    "declared_total_net_kg": 140.0,
+    "declared_total_gross_kg": 158.0,
+    "declared_total_cartons": 7,
+    "notes": [
+      "Delivery to forwarder warehouse Shanghai."
+    ],
+    "lines": [
+      {
+        "line_id": "INV-L1",
+        "sku": "SKU-701",
+        "description": "Valve Assembly Kit",
+        "qty": 60,
+        "unit": "SETS",
+        "unit_price": 45.0,
+        "line_amount": 2700.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          362,
+          41,
+          440,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L2",
+        "sku": "SKU-702",
+        "description": "Brass Adapter",
+        "qty": 100,
+        "unit": "PCS",
+        "unit_price": 8.0,
+        "line_amount": 800.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          440,
+          41,
+          518,
+          959
+        ]
+      },
+      {
+        "line_id": "INV-L3",
+        "sku": "SKU-703",
+        "description": "Teflon Seal Tape Roll",
+        "qty": 200,
+        "unit": "PCS",
+        "unit_price": 2.0,
+        "line_amount": 400.0,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          518,
+          41,
+          596,
+          959
+        ]
+      }
+    ],
+    "header_bbox": [
+      151,
+      41,
+      252,
+      959
+    ]
+  },
+  "packing_list": {
+    "packing_list_no": "PL-2026-404",
+    "incoterm": "EXW SHANGHAI",
+    "declared_total_cartons": 7,
+    "declared_total_net_kg": 140.0,
+    "declared_total_gross_kg": 158.0,
+    "notes": [
+      "Packed in 5-ply export cartons."
+    ],
+    "rows": [
+      {
+        "row_id": "PL-R1",
+        "carton_range": "1-6",
+        "carton_count": 6,
+        "sku": "SKU-701",
+        "qty_per_carton": 40,
+        "total_qty": 240,
+        "unit": "PCS",
+        "net_weight": 120.0,
+        "gross_weight": 135.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          362,
+          43,
+          440,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R2",
+        "carton_range": "7-7",
+        "carton_count": 1,
+        "sku": "SKU-702",
+        "qty_per_carton": 100,
+        "total_qty": 100,
+        "unit": "PCS",
+        "net_weight": 12.0,
+        "gross_weight": 14.0,
+        "weight_unit": "KG",
+        "shared_carton": false,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          440,
+          43,
+          518,
+          957
+        ]
+      },
+      {
+        "row_id": "PL-R3",
+        "carton_range": "7-7",
+        "carton_count": 0,
+        "sku": "SKU-703",
+        "qty_per_carton": 200,
+        "total_qty": 200,
+        "unit": "PCS",
+        "net_weight": 8.0,
+        "gross_weight": 9.0,
+        "weight_unit": "KG",
+        "shared_carton": true,
+        "explicit_pcs_per_set": null,
+        "bbox": [
+          518,
+          43,
+          596,
+          957
+        ]
+      }
+    ],
+    "header_bbox": [
+      151,
+      43,
+      252,
+      957
+    ]
+  },
+  "expected_findings": [
+    {
+      "code": "UNIT_AMBIGUITY_UNCONVERTIBLE",
+      "severity": "AMBIGUITY",
+      "sku": "SKU-701",
+      "origins": [
+        "INV-L1",
+        "PL-R1"
+      ],
+      "detail": "Invoice unit is SETS (60 SETS) and Packing List unit is PCS (240 PCS) without an explicit conversion factor in the documents."
+    }
+  ]
+}
