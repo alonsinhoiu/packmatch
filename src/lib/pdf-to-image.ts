@@ -1,9 +1,13 @@
 import * as pdfjsLib from "pdfjs-dist";
 
-// El worker se carga por CDN con la versión fijada a la instalada: el bundle
-// del worker no se empaqueta en Next sin loaders extra, y la app ya exige red
-// para POST /api/extract de todos modos.
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+// Worker distribuido CON la aplicación: `new URL(..., import.meta.url)` hace
+// que el bundler emita el worker de la versión instalada de pdfjs-dist como
+// asset propio (mismo origen). Nada se pide a un CDN, así que una versión
+// inexistente en cdnjs (p. ej. 6.5.438 -> 404) ya no puede bloquear la carga.
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url
+).toString();
 
 // 150 DPI igual que el raster del servidor (pdftoppm -r 150): el PDF base es
 // 72 DPI, así que la escala es 150/72.
@@ -27,15 +31,19 @@ export async function pdfFirstPageToPngDataUrl(
 ): Promise<string> {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-  const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: RENDER_SCALE });
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.floor(viewport.width);
-  canvas.height = Math.floor(viewport.height);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvas 2D no disponible para rasterizar el PDF.");
+  try {
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: RENDER_SCALE });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Canvas 2D no disponible para rasterizar el PDF.");
+    }
+    await page.render({ canvas, viewport }).promise;
+    return canvas.toDataURL("image/png");
+  } finally {
+    await (pdf as unknown as { destroy?: () => Promise<void> }).destroy?.().catch(() => undefined);
   }
-  await page.render({ canvas, viewport }).promise;
-  return canvas.toDataURL("image/png");
 }

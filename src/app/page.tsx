@@ -3,7 +3,7 @@
 import { parseInvoicePaste, parsePackingPaste } from "@/lib/paste-import";
 import { workspaceIssues } from "@/lib/workspace-validation";
 import { comparableQuantities } from "@/lib/reconcile-presentation";
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   PRELOADED_CASES,
   WORST_CASE_BREAK_UI_SHIPMENT,
@@ -39,6 +39,8 @@ import {
 } from "@/lib/i18n/findings";
 import type { UiLocale } from "@/lib/i18n/locale";
 import { isPdfFile, pdfFirstPageToPngDataUrl } from "@/lib/pdf-to-image";
+import { classifyFetchError, EXTRACTION_TIMEOUTS, readExtractResponse } from "@/lib/extract-response";
+import { snapDocumentRows } from "@/lib/bbox-grid";
 import {
   Plus, RotateCcw, FileText, Package, ArrowRight, ArrowLeft, X, Copy, Download,
   AlertCircle, CheckCircle2, HelpCircle, Trash2, ChevronDown, ExternalLink, Info, Weight,
@@ -79,7 +81,8 @@ function localizeExtractError(
   locale: UiLocale,
   code: string | null,
   rawMessage: string,
-  retrySeconds?: number
+  retrySeconds?: number,
+  httpStatus?: number
 ): string {
   const e = getDictionary(locale).extractErrors;
   switch (code) {
@@ -97,28 +100,29 @@ function localizeExtractError(
       }
       return formatTemplate(e.rateLimited, { seconds: seconds ?? 60 });
     }
-    case "META_HTTP_ERROR": {
-      const m = rawMessage.match(/Error HTTP (\S+) desde Meta API: ([\s\S]*)/);
-      return formatTemplate(e.metaHttp, {
-        status: m ? m[1] : rawMessage.slice(0, 60),
-        detail: (m ? m[2] : rawMessage).slice(0, 400),
-      });
-    }
+    case "META_HTTP_ERROR":
+      return formatTemplate(e.metaHttp, { status: httpStatus ?? "" });
+    case "NON_JSON_RESPONSE":
+      return e.nonJson;
+    case "PROVIDER_TIMEOUT":
+      return formatTemplate(e.timeout, { seconds: retrySeconds ?? 15 });
+    case "DUPLICATE_IN_FLIGHT":
+      return formatTemplate(e.rateLimited, { seconds: retrySeconds ?? 10 });
+    case "PROVIDER_UNREACHABLE":
+      return e.unreachable;
+    case "MALFORMED_PROVIDER_OUTPUT":
+      return e.malformed;
     case "META_EMPTY_CHOICE":
       return e.metaEmptyChoice;
     case "TRUNCATED_OUTPUT":
       return e.truncated;
-    case "EXTRACTION_FAILED": {
-      const m = rawMessage.match(/Fallo en extracción: ([\s\S]*)/);
-      return formatTemplate(e.failed, { message: m ? m[1] : rawMessage });
-    }
+    case "EXTRACTION_FAILED":
+      return e.unknown;
     case "INVALID_INVOICE_FILE":
     case "INVALID_PACKING_FILE":
       return formatTemplate(e.invalidFile, { message: rawMessage });
     default:
-      return rawMessage
-        ? formatTemplate(e.unknown, { message: rawMessage })
-        : e.unknown.replace("{message}", "");
+      return e.unknown;
   }
 }
 
@@ -247,6 +251,9 @@ function PackMatchWorkbench() {
   const [customInvName, setCustomInvName] = useState<string | null>(null);
   const [customPlName, setCustomPlName] = useState<string | null>(null);
   const [isExtractingLive, setIsExtractingLive] = useState<boolean>(false);
+  // Single-flight síncrono + secuencia anti-obsoletos (ver handleRunLiveExtraction).
+  const extractInFlightRef = useRef(false);
+  const extractSeqRef = useRef(0);
   const [extractError, setExtractError] = useState<string | null>(null);
 
   // Pegado desde Excel/CSV (hub de entrada, Opción B)
@@ -461,31 +468,34 @@ function PackMatchWorkbench() {
       setPasteError(dict.pasteModal.noValidRows);
       return;
     }
-    const grossSum = plRows.reduce((a, r) => a + r.gross_weight / (r.weight_unit === "LBS" ? LBS_PER_KG : 1), 0);
-    const netSum = plRows.reduce((a, r) => a + r.net_weight / (r.weight_unit === "LBS" ? LBS_PER_KG : 1), 0);
-    const ctnSum = plRows.reduce(
-      (a, r) => a + (r.shared_carton ? 0 : r.carton_count),
-      0
-    );
+    // Totales declarados = totales que calcula el motor (caja compartida con
+    // peso total repetido cuenta una vez; grupo ambiguo no fabrica kilos).
     const amountSum = invLines.reduce((a, l) => a + l.line_amount, 0);
-    setInvoice({
+    const computed = reconcileShipment(
+      { ...createEmptyInvoice(), lines: invLines },
+      { ...createEmptyPackingList(), rows: plRows }
+    ).computedTotals;
+    const ctnSum = computed.packingCalculatedCartons;
+    const importedInvoice: InvoiceData = {
       invoice_no: "PEGADO-EXCEL",
       incoterm: "",
       currency: "USD",
       declared_total_amount: Number(amountSum.toFixed(2)),
-      declared_total_net_kg: Number(netSum.toFixed(2)),
-      declared_total_gross_kg: Number(grossSum.toFixed(2)),
+      declared_total_net_kg: computed.packingCalculatedNetKg,
+      declared_total_gross_kg: computed.packingCalculatedGrossKg,
       declared_total_cartons: ctnSum,
       lines: invLines,
-    });
-    setPackingList({
+    };
+    const importedPacking: PackingListData = {
       packing_list_no: "PEGADO-EXCEL",
       incoterm: "",
       declared_total_cartons: ctnSum,
-      declared_total_net_kg: Number(netSum.toFixed(2)),
-      declared_total_gross_kg: Number(grossSum.toFixed(2)),
+      declared_total_net_kg: computed.packingCalculatedNetKg,
+      declared_total_gross_kg: computed.packingCalculatedGrossKg,
       rows: plRows,
-    });
+    };
+    setInvoice(importedInvoice);
+    setPackingList(importedPacking);
     setInvoiceImgUrl("");
     setPackingImgUrl("");
     setAuditTrail([]);
@@ -500,16 +510,7 @@ function PackMatchWorkbench() {
     setMatrixFilter("all");
     setFocusFindingIdx("all");
     setSelectedFindingIdx(0);
-    const firstFinding = reconcileShipment(
-      {
-        ...createEmptyInvoice(),
-        lines: invLines,
-      },
-      {
-        ...createEmptyPackingList(),
-        rows: plRows,
-      }
-    ).findings[0];
+    const firstFinding = reconcileShipment(importedInvoice, importedPacking).findings[0];
     setHighlightedOrigins(firstFinding ? firstFinding.origins : []);
   }
 
@@ -626,7 +627,11 @@ function PackMatchWorkbench() {
       string,
       unknown
     >;
-    const prevVal = currentRow ? currentRow[field] : "";
+    const prevVal = currentRow
+      ? field === "weight_scope"
+        ? currentRow.operator_weight_scope ?? currentRow.weight_scope ?? "PER_ROW"
+        : currentRow[field]
+      : "";
     let parsedVal: unknown = rawValue;
     if (
       field === "carton_count" ||
@@ -638,6 +643,8 @@ function PackMatchWorkbench() {
       parsedVal = Number(rawValue) || 0;
     } else if (field === "shared_carton") {
       parsedVal = Boolean(rawValue);
+    } else if (field === "weight_scope") {
+      parsedVal = String(rawValue);
     } else {
       parsedVal = String(rawValue);
     }
@@ -653,9 +660,11 @@ function PackMatchWorkbench() {
     setPackingList((prev) => {
       const next = structuredClone(prev);
       const row = next.rows[rowIdx] as unknown as Record<string, unknown>;
-      row[field] = parsedVal;
-      if (field === "shared_carton" && parsedVal) {
-        row.carton_count = 0;
+      if (field === "weight_scope") {
+        // La resolución del operador no pisa el dato del documento.
+        row.operator_weight_scope = parsedVal;
+      } else {
+        row[field] = parsedVal;
       }
       return next;
     });
@@ -682,6 +691,8 @@ function PackMatchWorkbench() {
             gross_weight: 0,
             weight_unit: "KG",
             shared_carton: false,
+            weight_scope: "PER_ROW",
+            operator_weight_scope: null,
             explicit_pcs_per_set: null,
             is_packaging_only: false,
           },
@@ -717,30 +728,49 @@ function PackMatchWorkbench() {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
+      reader.onerror = () => reject(reader.error ?? new Error("read error"));
       reader.readAsDataURL(file);
     });
   }
 
   async function handleHubFile(file: File, target: "invoice" | "packing") {
-    const dataUrl = await fileToDataUrl(file);
-    if (target === "invoice") {
-      setCustomInvDataUrl(dataUrl);
-      setCustomInvName(file.name);
-    } else {
-      setCustomPlDataUrl(dataUrl);
-      setCustomPlName(file.name);
+    // Conversión/lectura con error gestionado: se muestra un mensaje
+    // localizado y accionable, el otro documento (y un archivo anterior
+    // válido de este mismo lado) se conservan y se puede reintentar.
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      // Nuevos documentos invalidan una extracción en vuelo (su resultado
+      // sería obsoleto y se ignora por secuencia al llegar).
+      extractSeqRef.current += 1;
+      if (target === "invoice") {
+        setCustomInvDataUrl(dataUrl);
+        setCustomInvName(file.name);
+      } else {
+        setCustomPlDataUrl(dataUrl);
+        setCustomPlName(file.name);
+      }
+      setExtractError(null);
+    } catch {
+      setExtractError(
+        formatTemplate(getDictionary(locale).extractErrors.fileLoadFailed, { name: file.name })
+      );
     }
-    setExtractError(null);
   }
 
   async function handleRunLiveExtraction(invUrl: string, plUrl: string) {
+    // Sin reintentos automáticos: cada reintento es un clic manual del
+    // operador con la espera indicada. Los setState son asíncronos, así que
+    // el guard es un ref síncrono (un doble clic dispararía dos fetch).
+    if (extractInFlightRef.current) return;
+    extractInFlightRef.current = true;
+    const seq = ++extractSeqRef.current;
     setIsExtractingLive(true);
     setExtractError(null);
     try {
       const toDataUrlIfRelative = async (u: string) => {
         if (u.startsWith("data:")) return u;
         const resp = await fetch(u);
+        if (!resp.ok) throw { code: "PROVIDER_UNREACHABLE" };
         const blob = await resp.blob();
         return await new Promise<string>((resolve, reject) => {
           const r = new FileReader();
@@ -753,6 +783,10 @@ function PackMatchWorkbench() {
       const invDataUrl = await toDataUrlIfRelative(invUrl);
       const plDataUrl = await toDataUrlIfRelative(plUrl);
 
+      // Sin reintentos automáticos: un reintento podría duplicar el consumo
+      // del proveedor. Estado y formato se comprueban antes de parsear JSON
+      // (readExtractResponse); un cuerpo HTML nunca llega a JSON.parse del
+      // llamador como error crudo ni se muestra al operador.
       const resp = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -760,15 +794,34 @@ function PackMatchWorkbench() {
           invoiceDataUrl: invDataUrl,
           packingListDataUrl: plDataUrl,
         }),
+        signal: AbortSignal.timeout(EXTRACTION_TIMEOUTS.clientMs),
       });
-      const data = await resp.json();
-      if (!resp.ok || data.error) {
-        throw { code: data.errorCode ?? null, message: String(data.error || `HTTP ${resp.status}`), retryAfterSeconds: data.retryAfterSeconds };
+      const data = await readExtractResponse(resp);
+      if (seq !== extractSeqRef.current) return; // obsoleta: llegó otra petición después
+      if (typeof data.requestId === "string") {
+        console.debug(`[extract] seq=${seq} requestId=${data.requestId}`);
       }
-      setInvoice(data.extracted.invoice);
-      setPackingList(data.extracted.packing_list);
-      setInvoiceImgUrl(data.normalizedInvoiceDataUrl || invDataUrl);
-      setPackingImgUrl(data.normalizedPackingListDataUrl || plDataUrl);
+      if (!data.extracted || typeof data.extracted !== "object") {
+        throw { code: "MALFORMED_PROVIDER_OUTPUT" };
+      }
+      const extracted = data.extracted as { invoice: InvoiceData; packing_list: PackingListData };
+      const invImgUrl = typeof data.normalizedInvoiceDataUrl === "string" ? data.normalizedInvoiceDataUrl : invDataUrl;
+      const plImgUrl = typeof data.normalizedPackingListDataUrl === "string" ? data.normalizedPackingListDataUrl : plDataUrl;
+      // Anclaje visual: si la imagen tiene rejilla detectable, las bandas se
+      // ajustan a sus líneas reales; si no, se conserva el grounding del
+      // modelo (con su marca de estimado). Un fallo aquí nunca bloquea.
+      let finalInvoice = extracted.invoice;
+      let finalPacking = extracted.packing_list;
+      try {
+        const snappedLines = await snapDocumentRows(extracted.invoice.lines, invImgUrl);
+        const snappedRows = await snapDocumentRows(extracted.packing_list.rows, plImgUrl);
+        finalInvoice = { ...extracted.invoice, lines: snappedLines };
+        finalPacking = { ...extracted.packing_list, rows: snappedRows };
+      } catch { /* conservar grounding original */ }
+      setInvoice(finalInvoice);
+      setPackingList(finalPacking);
+      setInvoiceImgUrl(invImgUrl);
+      setPackingImgUrl(plImgUrl);
       setAuditTrail([]);
       setUndoHistory([]);
       setFactorDrafts({});
@@ -778,17 +831,24 @@ function PackMatchWorkbench() {
       setMatrixFilter("all");
       setFocusFindingIdx("all");
       const firstFinding = reconcileShipment(
-        data.extracted.invoice,
-        data.extracted.packing_list
+        finalInvoice,
+        finalPacking
       ).findings[0];
       setHighlightedOrigins(firstFinding ? firstFinding.origins : []);
     } catch (err: unknown) {
-      const e = err as { code?: string | null; message?: unknown; retryAfterSeconds?: number };
-      const raw = String((e as { message?: unknown })?.message ?? err);
-      const code = typeof (e as { code?: unknown })?.code === "string" ? (e as { code: string }).code : null;
-      setExtractError(localizeExtractError(locale, code, raw, (e as { retryAfterSeconds?: number })?.retryAfterSeconds));
+      if (seq !== extractSeqRef.current) return; // obsoleta
+      // Los archivos cargados NO se limpian: el operador puede reintentar.
+      const classified = classifyFetchError(err);
+      const e = err as { retryAfterSeconds?: number; status?: number; requestId?: string };
+      if (e?.requestId) {
+        console.debug(`[extract] seq=${seq} failed requestId=${e.requestId} code=${classified.code}`);
+      }
+      setExtractError(localizeExtractError(locale, classified.code, "", e?.retryAfterSeconds, e?.status));
     } finally {
-      setIsExtractingLive(false);
+      if (seq === extractSeqRef.current) {
+        extractInFlightRef.current = false;
+        setIsExtractingLive(false);
+      }
     }
   }
 
@@ -801,7 +861,7 @@ function PackMatchWorkbench() {
 
   function handleDownloadCsv() {
     if (!canExport) return;
-    const csv = generateReconciliationCsv(reconciliation);
+    const csv = generateReconciliationCsv(reconciliation, invoice);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -920,22 +980,25 @@ function PackMatchWorkbench() {
             <button type="button" onClick={addPackingRow} className="btn-press inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-(--pm-primary) hover:bg-(--pm-primary-hover) text-white text-sm font-bold cursor-pointer"><Plus className="w-4 h-4" aria-hidden="true" /> {dict.capture.addRow}</button></div>
           <div className="overflow-x-auto rounded-xl border border-(--pm-border)">
             <table className="w-full text-left text-sm min-w-[720px]">
-              <thead><tr className="bg-(--pm-selection) text-(--pm-ink) text-xs"><th scope="col" className="py-2.5 px-3">{dict.capture.colRow}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colCartons}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colCartonCount}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colProduct}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colUnitsPer}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colTotalUnits}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colNet}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colGross}</th><th scope="col" className="py-2.5 px-3"><span className="sr-only">{dict.capture.colDelete}</span></th></tr></thead>
+              <thead><tr className="bg-(--pm-selection) text-(--pm-ink) text-xs"><th scope="col" className="py-2.5 px-3">{dict.capture.colRow}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colCartons}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colCartonCount}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colProduct}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colUnitsPer}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colTotalUnits}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colPackingUnit}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colNet}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colGross}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colSharedCarton}</th><th scope="col" className="py-2.5 px-3">{dict.capture.colWeightScope}</th><th scope="col" className="py-2.5 px-3"><span className="sr-only">{dict.capture.colDelete}</span></th></tr></thead>
               <tbody className="divide-y divide-(--pm-border)">
                 {packingList.rows.map((row, idx) => (
                   <tr key={row.row_id}>
                     <td className="py-2 px-3 text-(--pm-text-secondary) whitespace-nowrap">{formatTemplate(dict.capture.rowLabel, { index: idx + 1 })}</td>
                     <td className="py-2 px-2"><input type="text" aria-label={formatTemplate(dict.capture.rangeAria, { index: idx + 1 })} value={row.carton_range} onChange={(e) => updatePackingRow(idx, "carton_range", e.target.value)} className="w-24 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
-                    <td className="py-2 px-2">{row.shared_carton ? <span className="text-xs px-2 py-1 rounded-full bg-(--pm-selection) font-bold">{dict.capture.sharedCarton}</span> : <input type="number" aria-label={formatTemplate(dict.capture.cartonCountAria, { index: idx + 1 })} value={row.carton_count} onChange={(e) => updatePackingRow(idx, "carton_count", e.target.value)} className="w-16 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" />}</td>
+                    <td className="py-2 px-2"><input type="number" aria-label={formatTemplate(dict.capture.cartonCountAria, { index: idx + 1 })} value={row.carton_count} onChange={(e) => updatePackingRow(idx, "carton_count", e.target.value)} className="w-16 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
                     <td className="py-2 px-2"><input type="text" aria-label={formatTemplate(dict.capture.packingSkuAria, { index: idx + 1 })} value={row.sku} onChange={(e) => updatePackingRow(idx, "sku", e.target.value)} className="w-28 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
                     <td className="py-2 px-2"><input type="number" aria-label={formatTemplate(dict.capture.unitsPerAria, { index: idx + 1 })} value={row.qty_per_carton} onChange={(e) => updatePackingRow(idx, "qty_per_carton", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
                     <td className="py-2 px-2"><input type="number" aria-label={formatTemplate(dict.capture.totalUnitsAria, { index: idx + 1 })} value={row.total_qty} onChange={(e) => updatePackingRow(idx, "total_qty", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm font-bold" /></td>
+                    <td className="py-2 px-2"><select aria-label={formatTemplate(dict.capture.packingUnitAria, { index: idx + 1 })} value={row.unit} onChange={(e) => updatePackingRow(idx, "unit", e.target.value)} className="px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm">{row.unit !== "PCS" && row.unit !== "SETS" && <option value={row.unit}>{row.unit}</option>}<option value="PCS">PCS</option><option value="SETS">SETS</option></select></td>
                     <td className="py-2 px-2"><input type="number" step="0.5" aria-label={formatTemplate(dict.capture.netAria, { index: idx + 1 })} value={row.net_weight} onChange={(e) => updatePackingRow(idx, "net_weight", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
                     <td className="py-2 px-2"><input type="number" step="0.5" aria-label={formatTemplate(dict.capture.grossAria, { index: idx + 1 })} value={row.gross_weight} onChange={(e) => updatePackingRow(idx, "gross_weight", e.target.value)} className="w-20 px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm" /></td>
+                    <td className="py-2 px-2"><select aria-label={formatTemplate(dict.capture.sharedAria, { index: idx + 1 })} value={row.shared_carton ? "yes" : "no"} onChange={(e) => updatePackingRow(idx, "shared_carton", e.target.value === "yes")} className="px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm"><option value="no">{dict.capture.sharedNo}</option><option value="yes">{dict.capture.sharedYes}</option></select></td>
+                    <td className="py-2 px-2"><select aria-label={formatTemplate(dict.capture.weightScopeAria, { index: idx + 1 })} value={row.operator_weight_scope ?? row.weight_scope ?? "PER_ROW"} onChange={(e) => updatePackingRow(idx, "weight_scope", e.target.value)} className="px-2 py-1.5 bg-white border border-(--pm-border) rounded-md text-sm"><option value="PER_ROW">{dict.capture.weightScopePerRow}</option><option value="CARTON_TOTAL">{dict.capture.weightScopeCartonTotal}</option><option value="UNSPECIFIED">{dict.capture.weightScopeUnspecified}</option></select></td>
                     <td className="py-2 px-2"><button type="button" onClick={() => removePackingRow(idx)} aria-label={formatTemplate(dict.capture.deleteRowAria, { index: idx + 1 })} className="btn-press p-2 rounded-lg text-(--pm-error) hover:bg-(--pm-error-bg) cursor-pointer"><Trash2 className="w-4 h-4" aria-hidden="true" /></button></td>
                   </tr>
                 ))}
-                {packingList.rows.length === 0 && (<tr><td colSpan={9} className="py-10 px-3 text-center text-(--pm-text-secondary)">{dict.capture.noRows}</td></tr>)}
+                {packingList.rows.length === 0 && (<tr><td colSpan={12} className="py-10 px-3 text-center text-(--pm-text-secondary)">{dict.capture.noRows}</td></tr>)}
               </tbody>
             </table>
           </div>
@@ -1178,6 +1241,9 @@ function PackMatchWorkbench() {
                   <span className="text-sm text-(--pm-text-secondary)">{formatTemplate(dict.documents.findingsTotal, { count: findings.length })}</span>
                 </div>
                 <p className="mt-1 text-sm text-(--pm-text-secondary)">{dict.documents.hint}</p>
+                {(invoice.lines.some((l) => l.bbox_estimated) || packingList.rows.some((r) => r.bbox_estimated)) && (
+                  <p role="note" className="mt-2 text-sm text-(--pm-warning-text) bg-(--pm-warning-bg) border border-(--pm-warning-border) rounded-lg px-3 py-2">{dict.documents.estimatedNote}</p>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
