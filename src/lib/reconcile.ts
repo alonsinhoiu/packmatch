@@ -31,6 +31,18 @@ export interface InvoiceData {
   lines: InvoiceLine[];
 }
 
+/**
+ * Cómo debe agregarse el peso de una fila:
+ * - PER_ROW: el peso pertenece a esa fila/producto; se suma (incluye el caso
+ *   de peso distribuido entre productos de una misma caja).
+ * - CARTON_TOTAL: cada fila repite el peso total de la caja compartida;
+ *   se cuenta una sola vez por caja física.
+ * - UNSPECIFIED: el documento declara caja compartida pero no permite saber
+ *   si el peso es por producto o el total repetido; requiere resolución.
+ * Ausente = PER_ROW (semántica histórica de las filas de packing).
+ */
+export type PackingWeightScope = "PER_ROW" | "CARTON_TOTAL" | "UNSPECIFIED";
+
 export interface PackingListRow {
   row_id: string;
   carton_range: string;
@@ -43,6 +55,12 @@ export interface PackingListRow {
   gross_weight: number;
   weight_unit: string;
   shared_carton: boolean;
+  /** Alcance del peso según el documento (ver PackingWeightScope). */
+  weight_scope?: PackingWeightScope;
+  /** Resolución del operador sobre weight_scope; prevalece sobre el documento. */
+  operator_weight_scope?: PackingWeightScope | null;
+  /** Nota impresa en la fila (p. ej. "SHARED; SAME 8/10 kg"), si se capturó. */
+  notes?: string;
   explicit_pcs_per_set: number | null;
   is_packaging_only: boolean;
   /** Coordenadas normalizadas [ymin, xmin, ymax, xmax] (0..1000) de la fila en la imagen original */
@@ -74,6 +92,8 @@ export interface ReconciliationFinding {
     | "QTY_MISMATCH"
     | "UNDECLARED_ITEM_IN_PACKING_LIST"
     | "CARTON_COUNT_MISMATCH"
+    | "CARTON_COUNT_AMBIGUITY"
+    | "SHARED_CARTON_WEIGHT_AMBIGUITY"
     | "TOTAL_GROSS_WEIGHT_MISMATCH";
   severity: FindingSeverity;
   sku: string;
@@ -105,6 +125,26 @@ export interface ReconciliationResult {
     packingCalculatedNetKg: number;
     packingCalculatedGrossKg: number;
   };
+}
+
+/**
+ * Cardinalidad física que declara un rango de cajas, si es determinable:
+ * "7" -> 1, "7-9" / "CTN 1-6" -> span, "1,3,5" -> 3. Sin dígitos o con un
+ * span invertido devuelve null (no se inventa el número de bultos).
+ */
+export function parseCartonRangeCount(range: string): number | null {
+  const s = String(range || "").normalize("NFKC").toUpperCase();
+  const numbers = (s.match(/\d+/g) || []).map(Number);
+  if (numbers.length === 0) return null;
+  if (numbers.length === 1) return 1;
+  const span = s.match(/(\d+)\s*[-–—~]\s*(\d+)/) || s.match(/(\d+)\s+TO\s+(\d+)/);
+  if (span) {
+    const a = Number(span[1]);
+    const b = Number(span[2]);
+    return b >= a ? b - a + 1 : null;
+  }
+  if (/[,;]/.test(s)) return numbers.length;
+  return null;
 }
 
 /**
@@ -144,6 +184,83 @@ export function reconcileShipment(
     invBySku.set(sku, line);
   }
 
+  // 1b. Grupos de caja física compartida: decidir, por caja, si el peso se
+  // suma por fila, se cuenta una vez (total repetido) o es ambiguo.
+  // Nunca se deduce "total repetido" solo de pesos iguales sin marca: los
+  // pesos iguales sin alcance explícito generan ambigüedad resoluble.
+  const weightKgOf = (row: PackingListRow) => {
+    const u = String(row.weight_unit || "KG").toUpperCase().trim();
+    const f = u === "LBS" || u === "LB" ? 1 / LBS_PER_KG : 1;
+    return { net: Number(row.net_weight) * f, gross: Number(row.gross_weight) * f };
+  };
+  const declaredScope = (row: PackingListRow): PackingWeightScope | undefined =>
+    row.operator_weight_scope ?? row.weight_scope ?? undefined;
+  const skipWeightRowIds = new Set<string>();
+  const ambiguousWeightGroups: PackingListRow[][] = [];
+  const ambiguousCartonGroups: PackingListRow[][] = [];
+  // Cajas físicas por grupo compartido: la caja se cuenta una vez (el mayor
+  // carton_count del grupo, típicamente 1 en la primera fila y 0 en el resto),
+  // aunque todas las filas vengan marcadas como compartidas.
+  const cartonContribution = new Map<string, number>();
+  {
+    const byCarton = new Map<string, PackingListRow[]>();
+    for (const row of packingList.rows || []) {
+      const key = String(row.carton_range || "").toUpperCase().replace(/\s+/g, "");
+      const groupKey = key || row.row_id;
+      byCarton.set(groupKey, [...(byCarton.get(groupKey) || []), row]);
+    }
+    for (const group of byCarton.values()) {
+      if (group.length < 2) continue;
+      const scopes = group.map(declaredScope);
+      const isSharedGroup =
+        group.some((r) => Boolean(r.shared_carton)) || scopes.some((s) => s !== undefined && s !== "PER_ROW");
+      if (!isSharedGroup) continue;
+      const weights = group.map(weightKgOf);
+      const allWeightsEqual =
+        weights.every((w) => Math.abs(w.net - weights[0].net) < 0.01 && Math.abs(w.gross - weights[0].gross) < 0.01);
+      const hasCartonTotal = scopes.includes("CARTON_TOTAL");
+      const hasPerRow = scopes.includes("PER_ROW");
+      const hasUnspecified = scopes.includes("UNSPECIFIED");
+      let mode: "SUM" | "COUNT_ONCE" | "AMBIGUOUS";
+      if (hasCartonTotal && hasPerRow) mode = "AMBIGUOUS"; // marcas contradictorias
+      else if (hasCartonTotal) mode = allWeightsEqual ? "COUNT_ONCE" : "AMBIGUOUS";
+      else if (hasUnspecified) mode = "AMBIGUOUS";
+      else if (scopes.every((s) => s === "PER_ROW")) mode = "SUM"; // distribuido explícito, aunque los pesos coincidan
+      else mode = allWeightsEqual ? "AMBIGUOUS" : "SUM"; // legado sin marca: solo lo repetido idéntico es dudoso
+      // Conteo físico del grupo (una sola vez, en la primera fila):
+      // - Un único conteo positivo distinto se conserva tal cual (el rango
+      //   puede ser una etiqueta/palet con varias cajas: no se sustituye por
+      //   la cardinalidad del rango).
+      // - Si todas las filas traen 0 (p. ej. ambas marcadas compartidas por
+      //   el modelo), la caja no desaparece: se deriva de la cardinalidad
+      //   del rango ("7" -> 1, "7-9" -> 3).
+      // - Conteos positivos contradictorios, o todo cero sin rango
+      //   determinable, es ambiguo: no se inventa el número de bultos.
+      const positiveDistinct = [
+        ...new Set(group.map((r) => Number(r.carton_count || 0)).filter((n) => n > 0)),
+      ];
+      let physicalCartons: number | null;
+      if (positiveDistinct.length === 1) physicalCartons = positiveDistinct[0];
+      else if (positiveDistinct.length === 0)
+        physicalCartons = parseCartonRangeCount(group[0].carton_range);
+      else physicalCartons = null;
+      if (physicalCartons === null) {
+        ambiguousCartonGroups.push(group);
+        group.forEach((r) => cartonContribution.set(r.row_id, 0));
+      } else {
+        group.forEach((r, i) =>
+          cartonContribution.set(r.row_id, i === 0 ? physicalCartons! : 0)
+        );
+      }
+      if (mode === "COUNT_ONCE") {
+        group.slice(1).forEach((r) => skipWeightRowIds.add(r.row_id));
+      } else if (mode === "AMBIGUOUS") {
+        group.forEach((r) => skipWeightRowIds.add(r.row_id));
+        ambiguousWeightGroups.push(group);
+      }
+    }
+  }
+
   // 2. Verificación interna de filas de Packing List y agregación por SKU
   const plBySku = new Map<string, PackingListRow[]>();
   let totalPlNetKg = 0;
@@ -156,8 +273,10 @@ export function reconcileShipment(
     const cCount = Number(row.carton_count || 0);
     const shared = Boolean(row.shared_carton);
 
+    // Fila compartida sin grupo (su caja la aporta otra fila): su conteo
+    // positivo impreso se conserva; el 0 sigue siendo 0.
+    totalPlCartons += cartonContribution.get(row.row_id) ?? cCount;
     if (!shared) {
-      totalPlCartons += cCount;
       const qPerCtn = Number(row.qty_per_carton || 0);
       const tQty = Number(row.total_qty || 0);
       if (cCount > 0 && Math.abs(cCount * qPerCtn - tQty) > 0.01) {
@@ -181,8 +300,13 @@ export function reconcileShipment(
     const netKg = wUnit === "LBS" || wUnit === "LB" ? netW / LBS_PER_KG : netW;
     const grossKg =
       wUnit === "LBS" || wUnit === "LB" ? grossW / LBS_PER_KG : grossW;
-    totalPlNetKg += netKg;
-    totalPlGrossKg += grossKg;
+    // Caja compartida con total repetido: solo aporta la primera fila.
+    // Grupo ambiguo: no aporta hasta que el operador resuelva el alcance,
+    // para no fabricar un total (ni una falsa discrepancia) con un supuesto.
+    if (!skipWeightRowIds.has(row.row_id)) {
+      totalPlNetKg += netKg;
+      totalPlGrossKg += grossKg;
+    }
 
     // Regla física: Peso Bruto > Peso Neto
     if (grossKg < netKg - 0.01) {
@@ -411,10 +535,42 @@ export function reconcileShipment(
     }
   }
 
+  // 4b. Ambigüedad de peso en caja compartida (resoluble por el operador
+  // editando el alcance del peso: por fila o total de caja repetido).
+  for (const group of ambiguousWeightGroups) {
+    const ids = group.map((r) => r.row_id);
+    const range = group[0].carton_range;
+    findings.push({
+      code: "SHARED_CARTON_WEIGHT_AMBIGUITY",
+      severity: "AMBIGUITY",
+      sku: "ALL",
+      origins: ids,
+      detail: `Peso de caja compartida sin alcance determinable en la caja ${range} (${ids.join(", ")}): no se sabe si cada fila trae el peso por producto o si repiten el peso total de la caja. Confirma el alcance del peso para agregar los kilos una sola vez o sumarlos por producto.`,
+      detail_en: `Shared-carton weight scope cannot be determined for carton ${range} (${ids.join(", ")}): it is unclear whether each row carries its per-product weight or repeats the whole carton weight. Confirm the weight scope to count the kilos once or sum them per product.`,
+    });
+  }
+
+  // 4c. Ambigüedad de bultos de un grupo compartido: no se puede determinar
+  // cuántas cajas físicas son (conteos contradictorios o rango sin
+  // cardinalidad). Resoluble editando rango/nº de cajas del grupo.
+  for (const group of ambiguousCartonGroups) {
+    const ids = group.map((r) => r.row_id);
+    findings.push({
+      code: "CARTON_COUNT_AMBIGUITY",
+      severity: "AMBIGUITY",
+      sku: "ALL",
+      origins: ids,
+      detail: `Número de bultos sin determinar en la caja/rango compartido «${group[0].carton_range}» (${ids.join(", ")}): los conteos por fila no coinciden o el rango no permite derivar cuántas cajas físicas son. Confirma el rango o el nº de cajas del grupo.`,
+      detail_en: `Physical carton count cannot be determined for shared carton/range "${group[0].carton_range}" (${ids.join(", ")}): row counts conflict or the range has no determinable cardinality. Confirm the group's range or carton count.`,
+    });
+  }
+
   // 5. Verificación de totales globales de bultos y peso bruto
   const invCartons = Number(invoice.declared_total_cartons || 0);
   const plDeclCartons = Number(packingList.declared_total_cartons || 0);
-  if (invCartons !== plDeclCartons || plDeclCartons !== totalPlCartons) {
+  // Con un grupo de bultos ambiguo la suma está incompleta: no se emite un
+  // descuadre de bultos que podría ser falso.
+  if (ambiguousCartonGroups.length === 0 && (invCartons !== plDeclCartons || plDeclCartons !== totalPlCartons)) {
     const extraOrigins = ["INV-HEADER", "PL-HEADER"];
     for (const [plSku, plRows] of plBySku.entries()) {
       if (!matchedPlSkus.has(plSku)) {
@@ -432,7 +588,9 @@ export function reconcileShipment(
   }
 
   const invGross = Number(invoice.declared_total_gross_kg || 0.0);
-  if (Math.abs(totalPlGrossKg - invGross) > 0.25) {
+  // Con un grupo de peso ambiguo el total calculado está incompleto: no se
+  // emite una discrepancia de peso total que podría ser falsa.
+  if (ambiguousWeightGroups.length === 0 && Math.abs(totalPlGrossKg - invGross) > 0.25) {
     findings.push({
       code: "TOTAL_GROSS_WEIGHT_MISMATCH",
       severity: "DISCREPANCY",

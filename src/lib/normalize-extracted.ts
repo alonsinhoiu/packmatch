@@ -1,9 +1,12 @@
+import { parseCartonRangeCount } from "./reconcile.ts";
+import { refineRowBBoxes } from "./bbox.ts";
 import type {
   InvoiceData,
   InvoiceLine,
   NormalizedBBox,
   PackingListData,
   PackingListRow,
+  PackingWeightScope,
 } from "./reconcile";
 
 /** NFKC: pliega ancho completo (１２３, ，．) a ASCII para comparar y calcular. */
@@ -172,6 +175,34 @@ export function defaultRowBBox(
   return [ymin, 32, ymax, 968];
 }
 
+/**
+ * Alcance del peso de una caja compartida a partir del campo del modelo o de
+ * la nota impresa. Solo marcas textuales explícitas producen CARTON_TOTAL o
+ * PER_ROW; una nota de caja compartida sin dato de peso produce UNSPECIFIED.
+ */
+export function normalizeWeightScope(
+  rawScope: unknown,
+  notes: string,
+  isShared: boolean
+): PackingWeightScope | undefined {
+  const s = String(rawScope ?? "").normalize("NFKC").toUpperCase().trim();
+  if (["CARTON_TOTAL", "SHARED_TOTAL", "REPEATED", "REPEATED_TOTAL", "TOTAL_CAJA", "CARTON"].includes(s)) return "CARTON_TOTAL";
+  if (["PER_ROW", "PER_PRODUCT", "DISTRIBUTED", "POR_PRODUCTO", "ROW"].includes(s)) return "PER_ROW";
+  if (["UNSPECIFIED", "UNKNOWN", "AMBIGUOUS", "SIN_DETERMINAR"].includes(s)) return "UNSPECIFIED";
+  const t = String(notes || "").normalize("NFKC");
+  if (
+    /\bsame\s+[\d.,/]+\s*(kg|lb)/i.test(t) ||
+    /\bsame\b[^.;]{0,50}\b(weight|kg|peso)\b/i.test(t) ||
+    /\bshared\b[^.;]{0,50}\b(weight|total)\b/i.test(t) ||
+    /peso\s+(total\s+)?(de\s+la\s+)?caja/i.test(t) ||
+    /mismo\s+peso|peso\s+repetido|repite\s+el\s+peso/i.test(t) ||
+    /(相同|同一|整箱)[^。;]{0,20}(重量|总重|毛重|净重)/.test(t)
+  ) return "CARTON_TOTAL";
+  if (/distributed|per[-\s]?product|por\s+producto|distribuid|分摊|按产品/.test(t.toLowerCase())) return "PER_ROW";
+  if (isShared && /shared|compartid|混装|共享/i.test(t)) return "UNSPECIFIED";
+  return undefined;
+}
+
 export function normalizeExtractedPayload(raw: any): {
   invoice: InvoiceData;
   packing_list: PackingListData;
@@ -263,7 +294,11 @@ export function normalizeExtractedPayload(raw: any): {
     if (rangeKey.length > 0) seenCartonRanges.add(rangeKey);
 
     const isShared = explicitlyShared || implicitlyShared;
-    let cartonCount = isShared ? 0 : parseSafeNumber(row?.carton_count, 0);
+    // Un conteo positivo impreso se conserva aunque la fila sea compartida:
+    // forzarlo a 0 hacía desaparecer la caja física cuando el modelo marcaba
+    // compartidas todas las filas del grupo. El 0 se mantiene como 0; el
+    // motor deriva la contribución del grupo desde el rango si procede.
+    let cartonCount = parseSafeNumber(row?.carton_count, 0);
 
     // Si una plantilla real no trae columna separada "Cartons" pero trae "CTN 1-4"
     if (!isShared && cartonCount === 0) {
@@ -298,6 +333,7 @@ export function normalizeExtractedPayload(raw: any): {
       (totalQty === 0 &&
         /FOAM|PALLET|DUNNAGE|PACKAGING|CRATE|托盘|泡沫|木箱/i.test(sku));
 
+    const rowNotes = String(row?.notes ?? row?.note ?? row?.remarks ?? "").normalize("NFKC").trim();
     return {
       row_id: canonicalRowId,
       carton_range: cartonRange,
@@ -310,6 +346,8 @@ export function normalizeExtractedPayload(raw: any): {
       gross_weight: parseSafeNumber(row?.gross_weight ?? row?.gw, 0),
       weight_unit: normalizeWeightUnit(row?.weight_unit),
       shared_carton: isShared,
+      weight_scope: normalizeWeightScope(row?.weight_scope, rowNotes, isShared),
+      notes: rowNotes || undefined,
       explicit_pcs_per_set:
         row?.explicit_pcs_per_set !== null &&
         row?.explicit_pcs_per_set !== undefined &&
@@ -329,10 +367,45 @@ export function normalizeExtractedPayload(raw: any): {
     };
   });
 
-  const computedInvCartons = normalizedRows.reduce(
-    (acc, r) => acc + (r.shared_carton ? 0 : r.carton_count),
-    0
-  );
+  // Refinamiento del grounding: solo si TODAS las filas de un documento
+  // traen bbox del modelo (sin estimados sintéticos mezclados). Corrige
+  // filas atípicas frente a la retícula y marca estimado lo corregido.
+  for (const rows of [normalizedLines, normalizedRows] as Array<Array<{ bbox?: NormalizedBBox; bbox_estimated?: boolean }>>) {
+    if (rows.length >= 3 && rows.every((r) => r.bbox && !r.bbox_estimated)) {
+      const refined = refineRowBBoxes(rows.map((r) => r.bbox!));
+      rows.forEach((r, i) => {
+        r.bbox = refined[i].bbox;
+        r.bbox_estimated = refined[i].estimated;
+      });
+    }
+  }
+
+  // Total físico de fallback coherente con el motor: por grupo compartido
+  // cuenta una vez (conteo positivo único; si todo es 0, cardinalidad del
+  // rango); el resto suma su conteo por fila.
+  const computedInvCartons = (() => {
+    const groups = new Map<string, PackingListRow[]>();
+    for (const r of normalizedRows) {
+      const k = r.carton_range.toUpperCase().replace(/\s+/g, "") || r.row_id;
+      groups.set(k, [...(groups.get(k) || []), r]);
+    }
+    let total = 0;
+    for (const group of groups.values()) {
+      const isSharedGroup = group.length > 1 && group.some((r) => r.shared_carton);
+      if (!isSharedGroup) {
+        total += group.reduce((a, r) => a + r.carton_count, 0);
+        continue;
+      }
+      const positives = [...new Set(group.map((r) => r.carton_count).filter((n) => n > 0))];
+      total +=
+        positives.length === 1
+          ? positives[0]
+          : positives.length === 0
+            ? (parseCartonRangeCount(group[0].carton_range) ?? 0)
+            : 0;
+    }
+    return total;
+  })();
 
   return {
     invoice: {

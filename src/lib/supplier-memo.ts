@@ -186,8 +186,13 @@ export function generateSupplierMemo(
 }
 
 export function generateReconciliationCsv(
-  reconciliation: ReconciliationResult
+  reconciliation: ReconciliationResult,
+  invoice?: InvoiceData
 ): string {
+  // Quantity_Status es solo cantidades (antes "Status", que se leía como
+  // conformidad completa). Overall_Status incorpora cualquier hallazgo del
+  // SKU (p. ej. error aritmético de importe): un producto con cantidades
+  // conformes pero importe erróneo ya no sale como MATCHED en general.
   const headers = [
     "SKU",
     "Paired_PL_SKU",
@@ -199,21 +204,73 @@ export function generateReconciliationCsv(
     "Packing_Unit",
     "Conversion_Factor_Used",
     "Conversion_Source",
-    "Status",
+    "Quantity_Status",
+    "Overall_Status",
+    "Finding_Codes",
+    "Invoice_Unit_Price",
+    "Invoice_Line_Amount_Declared",
+    "Invoice_Line_Amount_Expected",
+    "Invoice_Amount_Difference",
   ];
-  const rows = reconciliation.skuSummaries.map((s) => [
-    sanitizeCsvCell(s.sku),
-    sanitizeCsvCell(s.pairedPlSku ?? ""),
-    sanitizeCsvCell(s.invoiceLineId ?? ""),
-    sanitizeCsvCell(s.packingRowIds.join("|")),
-    sanitizeCsvCell(s.invoiceQty != null ? String(s.invoiceQty) : ""),
-    sanitizeCsvCell(s.invoiceUnit ?? ""),
-    sanitizeCsvCell(String(s.packingTotalQty)),
-    sanitizeCsvCell(s.packingUnit ?? ""),
-    sanitizeCsvCell(s.conversionFactorUsed != null ? String(s.conversionFactorUsed) : ""),
-    sanitizeCsvCell(s.conversionSource),
-    sanitizeCsvCell(s.status),
-  ]);
+  const overallFor = (sku: string, quantityStatus: string) => {
+    const own = reconciliation.findings.filter((f) => f.sku === sku);
+    if (quantityStatus === "MATCHED" && own.length === 0) return "MATCHED";
+    if (quantityStatus === "DISCREPANCY" || own.some((f) => f.severity === "DISCREPANCY")) return "DISCREPANCY";
+    return "AMBIGUOUS";
+  };
+  const rows = reconciliation.skuSummaries.map((s) => {
+    const line = invoice?.lines.find(
+      (l) => l.line_id === s.invoiceLineId || l.sku === s.sku
+    );
+    const expected =
+      line != null ? Number((line.qty * line.unit_price).toFixed(2)) : null;
+    const own = reconciliation.findings.filter((f) => f.sku === s.sku);
+    return [
+      sanitizeCsvCell(s.sku),
+      sanitizeCsvCell(s.pairedPlSku ?? ""),
+      sanitizeCsvCell(s.invoiceLineId ?? ""),
+      sanitizeCsvCell(s.packingRowIds.join("|")),
+      sanitizeCsvCell(s.invoiceQty != null ? String(s.invoiceQty) : ""),
+      sanitizeCsvCell(s.invoiceUnit ?? ""),
+      sanitizeCsvCell(String(s.packingTotalQty)),
+      sanitizeCsvCell(s.packingUnit ?? ""),
+      sanitizeCsvCell(s.conversionFactorUsed != null ? String(s.conversionFactorUsed) : ""),
+      sanitizeCsvCell(s.conversionSource),
+      sanitizeCsvCell(s.status),
+      sanitizeCsvCell(overallFor(s.sku, s.status)),
+      sanitizeCsvCell(own.map((f) => f.code).join("|")),
+      sanitizeCsvCell(line != null ? line.unit_price.toFixed(2) : ""),
+      sanitizeCsvCell(line != null ? line.line_amount.toFixed(2) : ""),
+      sanitizeCsvCell(expected != null ? expected.toFixed(2) : ""),
+      sanitizeCsvCell(
+        line != null && expected != null
+          ? (line.line_amount - expected).toFixed(2)
+          : ""
+      ),
+    ];
+  });
+  // Hallazgos globales (sku "ALL": peso/bultos) también viajan en el CSV.
+  for (const f of reconciliation.findings.filter((x) => x.sku === "ALL")) {
+    rows.push([
+      sanitizeCsvCell("ALL"),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(f.origins.join("|")),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell("NONE"),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(f.severity === "DISCREPANCY" ? "DISCREPANCY" : "AMBIGUOUS"),
+      sanitizeCsvCell(f.code),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+      sanitizeCsvCell(""),
+    ]);
+  }
   return [
     headers.join(","),
     ...rows.map((r) =>

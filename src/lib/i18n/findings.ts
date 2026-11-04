@@ -51,8 +51,12 @@ export function shortFindingTitle(
         return `Wrong amount · ${f.sku}`;
       case "WEIGHT_LOGIC_VIOLATION":
         return `Gross weight below net · ${f.sku}`;
+      case "CARTON_COUNT_AMBIGUITY":
+        return "Shared-carton box count pending";
       case "TOTAL_GROSS_WEIGHT_MISMATCH":
         return "Total weight difference";
+      case "SHARED_CARTON_WEIGHT_AMBIGUITY":
+        return "Shared-carton weight pending";
       case "UNIT_AMBIGUITY_UNCONVERTIBLE":
         return `Set equivalent pending · ${f.sku}`;
       case "SKU_IDENTIFIER_AMBIGUITY":
@@ -83,8 +87,12 @@ export function shortFindingTitle(
         return `金额错误 · ${f.sku}`;
       case "WEIGHT_LOGIC_VIOLATION":
         return `毛重小于净重 · ${f.sku}`;
+      case "CARTON_COUNT_AMBIGUITY":
+        return "混装箱箱数待确认";
       case "TOTAL_GROSS_WEIGHT_MISMATCH":
         return "总重不符";
+      case "SHARED_CARTON_WEIGHT_AMBIGUITY":
+        return "混装箱重量待确认";
       case "UNIT_AMBIGUITY_UNCONVERTIBLE":
         return `套件换算待确认 · ${f.sku}`;
       case "SKU_IDENTIFIER_AMBIGUITY":
@@ -114,8 +122,12 @@ export function shortFindingTitle(
       return `Importe incorrecto · ${f.sku}`;
     case "WEIGHT_LOGIC_VIOLATION":
       return `Peso bruto menor que neto · ${f.sku}`;
+    case "CARTON_COUNT_AMBIGUITY":
+      return "Bultos de caja compartida pendientes";
     case "TOTAL_GROSS_WEIGHT_MISMATCH":
       return "Diferencia de peso total";
+    case "SHARED_CARTON_WEIGHT_AMBIGUITY":
+      return "Peso de caja compartida pendiente";
     case "UNIT_AMBIGUITY_UNCONVERTIBLE":
       return `Equivalencia de sets pendiente · ${f.sku}`;
     case "SKU_IDENTIFIER_AMBIGUITY":
@@ -172,9 +184,11 @@ export function describeFinding(
       case "UNIT_AMBIGUITY_UNCONVERTIBLE": {
         const invQty = invLine?.qty ?? skuSum?.invoiceQty ?? 0;
         const plQty = skuSum?.packingTotalQty ?? 0;
+        const invUnit = invLine?.unit ?? skuSum?.invoiceUnit ?? "";
+        const plUnit = skuSum?.packingUnit ?? "";
         return {
           title: `Unknown pieces per kit/set for product ${f.sku}`,
-          explanation: `The Invoice bills ${fmtNumber.format(invQty)} sets/kits${prodDesc}, while the warehouse counted ${fmtNumber.format(plQty)} loose pieces in the boxes. Since no document states how many pieces come in each set, it is not safe to guess.`,
+          explanation: `The Invoice bills ${fmtNumber.format(invQty)} ${invUnit}${prodDesc}, while the Packing List records ${fmtNumber.format(plQty)} ${plUnit}. Since no document states how many pieces come in each set (PCS per SET), it is not safe to guess whether they match.`,
           locationPills,
         };
       }
@@ -193,6 +207,20 @@ export function describeFinding(
         return {
           title: `Impossible weight on ${f.sku}: the packed box weighs less than the product alone`,
           explanation: `The Packing List records a Gross Weight (with box) lower than the Net Weight (product only). This triggers automatic rejection in the Customs system.`,
+          locationPills,
+        };
+      }
+      case "CARTON_COUNT_AMBIGUITY": {
+        return {
+          title: `How many physical boxes the shared carton represents is not determined`,
+          explanation: f.detail_en || f.detail,
+          locationPills,
+        };
+      }
+      case "SHARED_CARTON_WEIGHT_AMBIGUITY": {
+        return {
+          title: `Shared-carton weight needs confirmation before totals are trusted`,
+          explanation: f.detail_en || f.detail,
           locationPills,
         };
       }
@@ -268,9 +296,11 @@ export function describeFinding(
       case "UNIT_AMBIGUITY_UNCONVERTIBLE": {
         const invQty = invLine?.qty ?? skuSum?.invoiceQty ?? 0;
         const plQty = skuSum?.packingTotalQty ?? 0;
+        const invUnit = invLine?.unit ?? skuSum?.invoiceUnit ?? "";
+        const plUnit = skuSum?.packingUnit ?? "";
         return {
           title: `产品 ${f.sku} 每套所含件数未知`,
-          explanation: `发票按 ${fmtNumber.format(invQty)} 套/组开具${prodDesc}，而仓库在各箱中点得散件 ${fmtNumber.format(plQty)} 件。由于没有任何单证注明每套内含件数，不能臆测换算。`,
+          explanation: `发票登记 ${fmtNumber.format(invQty)} ${invUnit}${prodDesc}，而装箱单登记 ${fmtNumber.format(plQty)} ${plUnit}。由于没有任何单证注明每套内含件数（PCS/SET），不能臆测两者是否相符。`,
           locationPills,
         };
       }
@@ -289,6 +319,20 @@ export function describeFinding(
         return {
           title: `${f.sku} 重量异常：整箱毛重小于产品净重`,
           explanation: `装箱单记录的毛重（含箱）小于净重（仅产品），海关系统将自动退单。`,
+          locationPills,
+        };
+      }
+      case "CARTON_COUNT_AMBIGUITY": {
+        return {
+          title: `混装箱对应的实物箱数未确定`,
+          explanation: f.detail_en || f.detail,
+          locationPills,
+        };
+      }
+      case "SHARED_CARTON_WEIGHT_AMBIGUITY": {
+        return {
+          title: `混装箱重量需确认后才能信任合计`,
+          explanation: f.detail_en || f.detail,
           locationPills,
         };
       }
@@ -363,9 +407,11 @@ export function describeFinding(
     case "UNIT_AMBIGUITY_UNCONVERTIBLE": {
       const invQty = invLine?.qty ?? skuSum?.invoiceQty ?? 0;
       const plQty = skuSum?.packingTotalQty ?? 0;
+      const invUnit = invLine?.unit ?? skuSum?.invoiceUnit ?? "";
+      const plUnit = skuSum?.packingUnit ?? "";
       return {
         title: `No se sabe cuántas piezas trae cada Kit/Set del producto ${f.sku}`,
-        explanation: `La Factura cobra ${fmtNumber.format(invQty)} Sets/Kits${prodDesc}, mientras que el almacén contó ${fmtNumber.format(plQty)} piezas sueltas en las cajas. Como ningún documento indica cuántas piezas vienen dentro de cada Set, no es seguro adivinarlo.`,
+        explanation: `La Factura cobra ${fmtNumber.format(invQty)} ${invUnit}${prodDesc}, mientras que la Lista de Empaque registra ${fmtNumber.format(plQty)} ${plUnit}. Como ningún documento indica cuántas piezas vienen dentro de cada Set (PCS por SET), no es seguro adivinar si coinciden.`,
         locationPills,
       };
     }
@@ -384,6 +430,20 @@ export function describeFinding(
       return {
         title: `Peso imposible en ${f.sku}: la caja llena figura pesando menos que el producto sin caja`,
         explanation: `En la Lista de Empaque anotaron un Peso Bruto (con caja) menor que el Peso Neto (solo producto). Esto provoca rechazo automático en el sistema de Aduana.`,
+        locationPills,
+      };
+    }
+    case "CARTON_COUNT_AMBIGUITY": {
+      return {
+        title: `No está determinado a cuántas cajas físicas corresponde la caja compartida`,
+        explanation: f.detail,
+        locationPills,
+      };
+    }
+    case "SHARED_CARTON_WEIGHT_AMBIGUITY": {
+      return {
+        title: `El peso de la caja compartida requiere confirmación antes de confiar en los totales`,
+        explanation: f.detail,
         locationPills,
       };
     }

@@ -7,6 +7,9 @@ export type PasteErrorCode =
   | "MISSING_FIELD"
   | "INVALID_NUMBER"
   | "BAD_WEIGHT_UNIT"
+  | "BAD_SHARED_FLAG"
+  | "BAD_WEIGHT_SCOPE"
+  | "CONFLICTING_COLUMNS"
   | "INVOICE_FORMAT"
   | "DUPLICATE_SKU"
   | "MISSING_SKU"
@@ -147,14 +150,71 @@ export function parseInvoicePaste(text: string, locale: UiLocale = "es"): Invoic
   return out;
 }
 
+const SHARED_TRUE = ["SI", "SÍ", "YES", "Y", "TRUE", "1", "SHARED", "COMPARTIDA", "COMPARTIDO", "MIX", "混装", "共享", "是"];
+const SHARED_FALSE = ["NO", "FALSE", "0", "N", ""];
+function sharedToken(raw: string | undefined, locale: UiLocale): boolean | undefined {
+  if (raw === undefined) return undefined;
+  const s = raw.normalize("NFKC").trim().toUpperCase();
+  if (SHARED_FALSE.includes(s)) return s === "" ? undefined : false;
+  if (SHARED_TRUE.includes(s)) return true;
+  throw new PasteError("BAD_SHARED_FLAG", msg(locale, (p) => p.badShared, { value: raw }));
+}
+function weightScopeToken(raw: string | undefined, locale: UiLocale): PackingListRow["weight_scope"] {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const s = raw.normalize("NFKC").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (["CARTON_TOTAL", "TOTAL_CAJA", "TOTAL", "REPETIDO", "REPEATED", "REPEATED_TOTAL", "MISMO_PESO"].includes(s)) return "CARTON_TOTAL";
+  if (["PER_ROW", "POR_FILA", "POR_PRODUCTO", "PER_PRODUCT", "DISTRIBUIDO", "DISTRIBUTED", "FILA"].includes(s)) return "PER_ROW";
+  if (["UNSPECIFIED", "SIN_DETERMINAR", "AMBIGUO", "DESCONOCIDO", "UNKNOWN"].includes(s)) return "UNSPECIFIED";
+  throw new PasteError("BAD_WEIGHT_SCOPE", msg(locale, (p) => p.badWeightScope, { value: raw }));
+}
+const isWeightScopeToken = (raw: string) => ["CARTON_TOTAL", "TOTAL_CAJA", "TOTAL", "REPETIDO", "REPEATED", "REPEATED_TOTAL", "MISMO_PESO", "PER_ROW", "POR_FILA", "POR_PRODUCTO", "PER_PRODUCT", "DISTRIBUIDO", "DISTRIBUTED", "FILA", "UNSPECIFIED", "SIN_DETERMINAR", "AMBIGUO", "DESCONOCIDO", "UNKNOWN"].includes(raw.normalize("NFKC").trim().toUpperCase().replace(/[\s-]+/g, "_"));
+const isWeightUnitToken = (raw: string) => ["KG", "KGS", "KILOGRAMO", "KILOGRAMOS", "LB", "LBS", "LIBRA", "LIBRAS", "千克", "公斤", "磅", "英磅"].includes(raw.normalize("NFKC").trim().toUpperCase());
+const isSalesUnitToken = (raw: string) => ["PCS", "PC", "EA", "PZA", "PIEZA", "PIEZAS", "UND", "UN", "SETS", "SET", "KIT", "KITS", "JUEGO", "JUEGOS", "件", "个", "套", "组"].includes(raw.normalize("NFKC").trim().toUpperCase());
+
 export function parsePackingPaste(text: string, locale: UiLocale = "es"): PackingListRow[] {
   const out: PackingListRow[] = [];
   records(text, locale).forEach((c, idx) => {
     if ((skuHeader(c[0]) || skuHeader(c[1])) && c.slice(1).some(x => quantityHeader(x) || hasZh(x, ZH_PACKING_HEADERS) || ["cajas", "cartons", "neto", "bruto"].includes(key(x)))) return;
     try {
-      if (c.length < 2 || c.length > 8 || !c[0]) throw new PasteError("PACKING_FORMAT", msg(locale, (p) => p.packingFormat));
+      if (c.length < 2 || c.length > 14 || !c[0]) throw new PasteError("PACKING_FORMAT", msg(locale, (p) => p.packingFormat));
       let sku = "", range = `CTN ${out.length + 1}`, cartons = 1, per = 0, total = 0, net = 0, gross = 0, unit = "KG";
-      if (c.length >= 7) { range = c[0]; sku = c[1]; cartons = numeric(c[2], "labelCartons", locale); per = numeric(c[3], "labelPerCarton", locale); total = numeric(c[4], "labelTotal", locale); net = numeric(c[5], "labelNet", locale, 0); gross = numeric(c[6], "labelGross", locale, 0); unit = weightUnit(c[7], locale); }
+      // Formato extendido (compatible): tras las 7 columnas clásicas pueden
+      // venir, en cualquier orden, unidad de peso, unidad de venta
+      // (PCS/SETS/...), caja compartida (SI/NO) y alcance del peso
+      // (TOTAL_CAJA = total repetido por caja, POR_FILA = peso por producto,
+      // SIN_DETERMINAR). Sin esas columnas se conserva el formato antiguo.
+      let salesUnit: string | undefined, shared: boolean | undefined, weightScope: PackingListRow["weight_scope"];
+      let seenWeightUnit = false;
+      if (c.length >= 7) { range = c[0]; sku = c[1]; cartons = numeric(c[2], "labelCartons", locale); per = numeric(c[3], "labelPerCarton", locale); total = numeric(c[4], "labelTotal", locale); net = numeric(c[5], "labelNet", locale, 0); gross = numeric(c[6], "labelGross", locale, 0);
+        // Columnas opcionales en cualquier orden: cada tipo se lee por
+        // separado. El alcance del peso (POR_FILA, TOTAL_CAJA...) NO marca
+        // la caja como compartida: eso solo lo decide SI/NO. Repetir una
+        // columna con el mismo valor es inocuo; valores incompatibles
+        // lanzan CONFLICTING_COLUMNS en vez de sobrescribir en silencio.
+        const conflict = (value: string) => new PasteError("CONFLICTING_COLUMNS", msg(locale, (p) => p.conflictingColumns, { value }));
+        for (const extra of c.slice(7)) {
+          if (extra.trim() === "") continue;
+          if (isWeightUnitToken(extra)) {
+            const u = weightUnit(extra, locale);
+            if (seenWeightUnit && u !== unit) throw conflict(extra);
+            unit = u; seenWeightUnit = true;
+          } else if (isSalesUnitToken(extra)) {
+            const u = qtyUnit(extra);
+            if (salesUnit !== undefined && u !== salesUnit) throw conflict(extra);
+            salesUnit = u;
+          } else if (isWeightScopeToken(extra)) {
+            const s = weightScopeToken(extra, locale);
+            if (weightScope !== undefined && s !== weightScope) throw conflict(extra);
+            weightScope = s;
+          } else {
+            const s = sharedToken(extra, locale);
+            if (s !== undefined) {
+              if (shared !== undefined && s !== shared) throw conflict(extra);
+              shared = s;
+            }
+          }
+        }
+      }
       else if (c.length === 6) {
         if (isNumeric(c[1], locale)) { sku = c[0]; cartons = numeric(c[1], "labelCartons", locale); per = numeric(c[2], "labelPerCarton", locale); total = numeric(c[3], "labelTotal", locale); net = numeric(c[4], "labelNet", locale, 0); gross = numeric(c[5], "labelGross", locale, 0); }
         else { range = c[0]; sku = c[1]; per = numeric(c[2], "labelPerCarton", locale); total = numeric(c[3], "labelTotal", locale); net = numeric(c[4], "labelNet", locale, 0); gross = numeric(c[5], "labelGross", locale, 0); }
@@ -162,7 +222,12 @@ export function parsePackingPaste(text: string, locale: UiLocale = "es"): Packin
       else { sku = c[0]; total = numeric(c[1], "labelTotal", locale); per = total; if (c.length === 4) { net = numeric(c[2], "labelNet", locale, 0); gross = numeric(c[3], "labelGross", locale, 0); } else if (c.length === 3) { gross = numeric(c[2], "labelGross", locale, 0); net = gross; } }
       if (!sku) throw new PasteError("MISSING_SKU", msg(locale, (p) => p.missingSku));
       if (!Number.isSafeInteger(cartons)) throw new PasteError("CARTONS_INT", msg(locale, (p) => p.cartonsInt));
-      out.push({ row_id: `PL-R${out.length + 1}`, carton_range: range, carton_count: cartons, sku, qty_per_carton: per, total_qty: total, unit: "PCS", net_weight: net, gross_weight: gross, weight_unit: unit, shared_carton: false, explicit_pcs_per_set: null, is_packaging_only: false });
+      // Sin columna de unidad de venta (formato antiguo) se conserva PCS por
+      // compatibilidad; el formato extendido la trae explícita y nunca se
+      // adivina. Caja compartida sin alcance de peso -> UNSPECIFIED (ambiguo
+      // resoluble), nunca "caja independiente" ni "total repetido" por defecto.
+      const isShared = shared ?? false;
+      out.push({ row_id: `PL-R${out.length + 1}`, carton_range: range, carton_count: cartons, sku, qty_per_carton: per, total_qty: total, unit: salesUnit ?? "PCS", net_weight: net, gross_weight: gross, weight_unit: unit, shared_carton: isShared, weight_scope: weightScope ?? (isShared ? "UNSPECIFIED" : undefined), explicit_pcs_per_set: null, is_packaging_only: false });
     } catch (e) {
       if (e instanceof PasteError && e.code !== "PACKING_ROW") {
         throw new PasteError("PACKING_ROW", msg(locale, (p) => p.packingRow, { row: idx + 1, reason: e.message }));
