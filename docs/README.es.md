@@ -40,6 +40,8 @@ npm run build
 
 La prueba de paridad detecta 13/13 hallazgos esperados en siete casos sintéticos, con orígenes exactos y cero alertas adicionales, tanto para los datos de referencia como para extracciones guardadas. No representa una garantía para documentos nuevos. [Metodología y límites](VALIDATION.md).
 
+La suite QA incluye 67 comprobaciones y un fixture sintético versionado para las regresiones de cajas compartidas, pesos, unidades, importación, CSV y coordenadas visuales. En la prueba pública del 4 de noviembre de 2026 se completó el recorrido real con PNG, pero dos extracciones desde PDF fallaron; una prueba directa adicional recibió un HTTP 504 por inactividad a los 30,82 segundos. La carga PDF funciona, pero la estabilidad de las extracciones lentas sigue pendiente. La extracción realiza dos llamadas al proveedor en paralelo por envío, sin reintentos automáticos.
+
 ## Dos selectores de idioma
 
 PackMatch distingue el **idioma de la interfaz** del **idioma de la minuta**:

@@ -2,7 +2,7 @@
 
 ## Reproducible checks
 
-`npm run test:qa` runs 53 checks: 20 spreadsheet import cases, 5 comparison presentation cases, 8 workspace validation cases and 9 localization checks covering dictionary keys, interpolation, number formatting, persistence and localized messages, plus 11 multilingual extraction normalization checks using simulated responses.
+`npm run test:qa` runs 67 checks: 20 spreadsheet import cases, 5 comparison presentation cases, 8 workspace validation cases, 9 localization checks, 11 multilingual extraction normalization checks using simulated responses, and 14 shipment-review regressions. The additional regressions cover shared cartons and weights, unit conversion explanations, import-column order, CSV finding states, extraction response handling, and visual grounding. Their synthetic fixture is included at `scripts/fixtures/uat-2026-11-04-case.json`; the suite does not require private working files or an API key.
 
 `npm run verify-parity` loads the seven synthetic fixture directories in `work/prueba-packmatch/cases/`, reconciles their ground truth inputs and compares findings by code, SKU and origin set. It then repeats the comparison using recorded extraction payloads in `work/prueba-packmatch/results/summary_api.json`. Finally it checks operator confirmation of the C06 conversion factor.
 
@@ -21,6 +21,14 @@ Expected result: 13/13 findings and exact origin sets in each of the two passes,
 | C07 | Commercial-style columns without explicit row IDs |
 
 The cases are synthetic. Images/PDFs, structured reference data and expected findings are published together so results can be inspected. The model output is fallible even though reconciliation rules are deterministic.
+
+## Public deployment check — November 4, 2026
+
+The updated public site completed one real extraction from synthetic PNG documents with 14 physical cartons, 34 kg net and 49 kg gross. It found the four prepared issues; confirming 12 pieces per set left three. Source highlights, the supplier memo and the exported CSV were checked. Spreadsheet import, editing and undo were tested separately in the public interface.
+
+Both PDF uploads loaded successfully, but two browser extraction attempts received a non-JSON response. A separate direct API check using rasterized PDFs returned HTTP 504 with an HTML `Inactivity Timeout` response after 30.82 seconds. The exact intermediary responsible has not been established. These observations do not demonstrate general extraction reliability; the slower public request path remains unresolved even though the deterministic checks pass.
+
+Live extraction sends separate invoice and packing-list requests to the provider in parallel, normally two provider calls per submission. There are no automatic retries. Client-side single-flight and server-side in-flight deduplication reduce duplicate submissions, but the server guard is in memory per instance and does not guarantee deduplication across serverless instances.
 
 ## Limits
 

@@ -1,0 +1,275 @@
+{
+  "shipment": "PM-UAT-20261104",
+  "invoice": [
+    [
+      "AX-240",
+      "Industrial sensor",
+      240,
+      "PCS",
+      5,
+      1200
+    ],
+    [
+      "BV-080",
+      "Valve",
+      80,
+      "PCS",
+      12.5,
+      950
+    ],
+    [
+      "CS-090",
+      "Steel fastener",
+      90,
+      "PCS",
+      2,
+      180
+    ],
+    [
+      "DK-048",
+      "Maintenance kit components",
+      48,
+      "PCS",
+      3,
+      144
+    ],
+    [
+      "ZX-101",
+      "Seal type A",
+      20,
+      "PCS",
+      4,
+      80
+    ],
+    [
+      "ZX-1O1",
+      "Seal type B - distinct item",
+      30,
+      "PCS",
+      4,
+      120
+    ],
+    [
+      "GX-040",
+      "Bracket",
+      40,
+      "PCS",
+      6,
+      240
+    ],
+    [
+      "HX-050",
+      "Cable",
+      50,
+      "PCS",
+      7,
+      350
+    ],
+    [
+      "IX-060",
+      "Connector",
+      60,
+      "PCS",
+      8,
+      480
+    ],
+    [
+      "JX-070",
+      "Adapter",
+      70,
+      "PCS",
+      9,
+      630
+    ],
+    [
+      "KX-080",
+      "Clamp",
+      80,
+      "PCS",
+      10,
+      800
+    ],
+    [
+      "LX-090",
+      "Washer",
+      90,
+      "PCS",
+      1,
+      90
+    ]
+  ],
+  "packing": [
+    [
+      "1",
+      "AX-240",
+      216,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "2",
+      "BV-080",
+      80,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "3",
+      "CS-090",
+      30,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "4",
+      "CS-090",
+      30,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "5",
+      "CS-090",
+      30,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "6",
+      "DK-048",
+      4,
+      "SETS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "7",
+      "ZX-101",
+      20,
+      "PCS",
+      8,
+      10,
+      "Shared carton with ZX-1O1"
+    ],
+    [
+      "7",
+      "ZX-1O1",
+      30,
+      "PCS",
+      8,
+      10,
+      "SHARED with ZX-101; SAME 8/10 kg"
+    ],
+    [
+      "8",
+      "GX-040",
+      40,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "9",
+      "HX-050",
+      50,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "10",
+      "IX-060",
+      60,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "11",
+      "JX-070",
+      70,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "12",
+      "KX-080",
+      80,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "13",
+      "LX-090",
+      90,
+      "PCS",
+      2,
+      3,
+      ""
+    ],
+    [
+      "14",
+      "SAMPLE-01",
+      1,
+      "PCS",
+      2,
+      3,
+      "Free sample"
+    ]
+  ],
+  "physical_cartons": 14,
+  "net_kg": 34,
+  "gross_kg": 49,
+  "expected": [
+    {
+      "sku": "AX-240",
+      "issue": "QTY_MISMATCH",
+      "invoice": 240,
+      "packing": 216
+    },
+    {
+      "sku": "BV-080",
+      "issue": "INVOICE_LINE_MATH_ERROR",
+      "declared": 950,
+      "correct": 1000
+    },
+    {
+      "sku": "DK-048",
+      "issue": "UNIT_AMBIGUITY_UNCONVERTIBLE",
+      "invoice": "48 PCS",
+      "packing": "4 SETS"
+    },
+    {
+      "sku": "SAMPLE-01",
+      "issue": "UNDECLARED_ITEM_IN_PACKING_LIST"
+    }
+  ],
+  "controls": [
+    "CS-090: three rows of 30 equals 90",
+    "ZX-101 and ZX-1O1: distinct products",
+    "shared physical carton weight counted once",
+    "LX-090: low contrast quantity 90"
+  ],
+  "operator_confirmation": {
+    "sku": "DK-048",
+    "pcs_per_set": 12
+  }
+}
