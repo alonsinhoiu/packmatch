@@ -8,7 +8,7 @@
 <text x="64" y="159" fill="#a6d3c7" font-size="12" font-weight="700" letter-spacing="3">DOCUMENT INTELLIGENCE / GLOBAL TRADE</text>
 <text x="64" y="230" fill="#f7f8f6" font-size="48" font-weight="700" letter-spacing="-2">Every shipment tells</text><text x="64" y="288" fill="#f7f8f6" font-size="48" font-weight="700" letter-spacing="-2">two stories.</text><text x="64" y="346" fill="#a6d3c7" font-size="48" font-weight="700" letter-spacing="-2">Make them match.</text>
 <text x="64" y="403" fill="#c0d1d2" font-size="17">Meta AI reads the documents. Code checks the facts.</text>
-<rect x="64" y="447" width="185" height="30" rx="15" fill="#ffffff" fill-opacity=".08"/><text x="80" y="467" fill="#c8e4dc" font-size="11" letter-spacing="1">OPEN SOURCE · BUILT IN CHILE</text>
+<rect x="64" y="447" width="240" height="30" rx="15" fill="#ffffff" fill-opacity=".08"/><text x="80" y="467" fill="#c8e4dc" font-size="11" letter-spacing="1">OPEN SOURCE · BUILT IN CHILE</text>
 <g transform="translate(760 116)">
 <rect x="0" y="0" width="210" height="245" rx="14" fill="#f7f8f6"/><text x="22" y="36" fill="#193440" font-size="12" font-weight="700" letter-spacing="1">COMMERCIAL INVOICE</text>
 <g stroke="#d4dedd" stroke-width="6"><path d="M22 65H150M22 90H185M22 115H185M22 140H185M22 165H185M22 190H132"/></g>
