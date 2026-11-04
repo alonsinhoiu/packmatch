@@ -3,8 +3,11 @@
   publish = ".next"
 
 [functions]
-  # La extracción multimodal tarda 12-20 s; Netlify permite 60 s síncronos.
-  # No fijar timeout: el valor de la plataforma (60 s) ya cubre el peor caso medido.
+  # La extracción multimodal tarda 12-50 s; Netlify permite 60 s síncronos
+  # de ejecución (no configurable). ADEMÁS el borde corta conexiones ~30 s
+  # sin bytes (inactividad): por eso /api/extract responde SSE con
+  # heartbeats cada 10 s y un único JSON final. No fijar timeout: el valor
+  # de la plataforma (60 s) ya cubre el peor caso medido.
 
 [[headers]]
   for = "/*"

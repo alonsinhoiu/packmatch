@@ -102,7 +102,7 @@ The key stays on the server. Never add it to client code or commit it. The brows
 ## Reproduce the checks
 
 ```bash
-npm run test:qa          # 67 regression checks (incl. shipment review and visual grounding)
+npm run test:qa          # 74 regression checks (incl. shipment review, grounding and streaming)
 npm run verify-parity    # Seven fixtures + recorded model extractions
 npx tsc --noEmit         # Type checking
 npm run build           # Production build

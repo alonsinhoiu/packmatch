@@ -120,6 +120,7 @@ export const en: Dictionary = {
     failed: "Extraction failed. Keep your files and try again. ({message})",
     invalidFile: "Invalid file: {message}",
     unknown: "Extraction failed. Keep your files and try again.",
+    streamTruncated: "The response was interrupted before completing. Your files are kept: try again.",
     nonJson:
       "The extraction service returned an invalid response (it was not JSON). Your files are kept: try again; if it persists, wait a moment and retry.",
     timeout:

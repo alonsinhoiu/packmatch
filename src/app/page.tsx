@@ -39,7 +39,7 @@ import {
 } from "@/lib/i18n/findings";
 import type { UiLocale } from "@/lib/i18n/locale";
 import { isPdfFile, pdfFirstPageToPngDataUrl } from "@/lib/pdf-to-image";
-import { classifyFetchError, EXTRACTION_TIMEOUTS, readExtractResponse } from "@/lib/extract-response";
+import { classifyFetchError, consumeExtractResponse, EXTRACTION_TIMEOUTS } from "@/lib/extract-response";
 import { snapDocumentRows } from "@/lib/bbox-grid";
 import {
   Plus, RotateCcw, FileText, Package, ArrowRight, ArrowLeft, X, Copy, Download,
@@ -116,6 +116,8 @@ function localizeExtractError(
       return e.metaEmptyChoice;
     case "TRUNCATED_OUTPUT":
       return e.truncated;
+    case "STREAM_TRUNCATED":
+      return e.streamTruncated;
     case "EXTRACTION_FAILED":
       return e.unknown;
     case "INVALID_INVOICE_FILE":
@@ -784,19 +786,19 @@ function PackMatchWorkbench() {
       const plDataUrl = await toDataUrlIfRelative(plUrl);
 
       // Sin reintentos automáticos: un reintento podría duplicar el consumo
-      // del proveedor. Estado y formato se comprueban antes de parsear JSON
-      // (readExtractResponse); un cuerpo HTML nunca llega a JSON.parse del
-      // llamador como error crudo ni se muestra al operador.
+      // del proveedor. La ruta responde SSE con heartbeats (el borde corta
+      // conexiones ~30 s sin bytes); el JSON final íntegro viaja en un único
+      // frame `data:`. Sin `data:` completo no hay éxito (STREAM_TRUNCATED).
       const resp = await fetch("/api/extract", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream, application/json" },
         body: JSON.stringify({
           invoiceDataUrl: invDataUrl,
           packingListDataUrl: plDataUrl,
         }),
         signal: AbortSignal.timeout(EXTRACTION_TIMEOUTS.clientMs),
       });
-      const data = await readExtractResponse(resp);
+      const data = await consumeExtractResponse(resp);
       if (seq !== extractSeqRef.current) return; // obsoleta: llegó otra petición después
       if (typeof data.requestId === "string") {
         console.debug(`[extract] seq=${seq} requestId=${data.requestId}`);

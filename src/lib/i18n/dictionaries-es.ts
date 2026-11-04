@@ -118,6 +118,7 @@ export const es = {
     failed: "La extracción falló. Conserva los archivos y vuelve a intentarlo. ({message})",
     invalidFile: "Archivo no válido: {message}",
     unknown: "La extracción falló. Conserva los archivos y vuelve a intentarlo.",
+    streamTruncated: "La respuesta se interrumpió antes de completarse. Tus archivos se conservan: vuelve a intentarlo.",
     nonJson:
       "El servicio de extracción devolvió una respuesta no válida (no era JSON). Tus archivos se conservan: vuelve a intentarlo; si persiste, espera un momento y reintenta.",
     timeout:

@@ -115,6 +115,7 @@ export const zh: Dictionary = {
     failed: "提取失败。请保留文件并重试。（{message}）",
     invalidFile: "无效文件：{message}",
     unknown: "提取失败。请保留文件并重试。",
+    streamTruncated: "响应在完成前中断。文件已保留：请重试。",
     nonJson:
       "提取服务返回了无效响应（不是 JSON）。文件已保留：请重试；如持续出现，请稍候再试。",
     timeout:

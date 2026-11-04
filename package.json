@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "verify-parity": "node --experimental-strip-types scripts/verify-parity.ts",
-    "test:qa": "node --experimental-strip-types scripts/qa-paste-regression.ts && node --experimental-strip-types scripts/qa-presentation-regression.ts && node --experimental-strip-types scripts/qa-workspace-regression.ts && node --experimental-strip-types scripts/qa-i18n-regression.ts && node --experimental-strip-types scripts/qa-extraction-multilingual.ts && node --experimental-strip-types scripts/qa-uat-2026-11-04-regression.ts"
+    "test:qa": "node --experimental-strip-types scripts/qa-paste-regression.ts && node --experimental-strip-types scripts/qa-presentation-regression.ts && node --experimental-strip-types scripts/qa-workspace-regression.ts && node --experimental-strip-types scripts/qa-i18n-regression.ts && node --experimental-strip-types scripts/qa-extraction-multilingual.ts && node --experimental-strip-types scripts/qa-uat-2026-11-04-regression.ts && node --experimental-strip-types scripts/qa-extract-streaming-regression.ts"
   },
   "dependencies": {
     "lucide-react": "^1.16.0",

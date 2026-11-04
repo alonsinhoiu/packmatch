@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { claimInflight, releaseInflight, sha256Short } from "@/lib/extract-inflight";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import {
   normalizeExtractedPayload,
   validateDataUrlAndMagicBytes,
 } from "@/lib/normalize-extracted";
-import { EXTRACTION_TIMEOUTS, isTimeoutError, tryParseJson } from "@/lib/extract-response";
+import { EXTRACTION_TIMEOUTS, SSE_HEARTBEAT_MS, isTimeoutError, tryParseJson } from "@/lib/extract-response";
 
 function normalizeToImageDataUrl(dataUrl: string): string {
   if (!dataUrl.startsWith("data:application/pdf;base64,")) {
@@ -147,26 +148,6 @@ function stageLog(
     })
   );
 }
-function sha256Short(s: string): string {
-  return createHash("sha256").update(s).digest("hex").slice(0, 32);
-}
-
-// Dedup SOLO de vuelo (in-flight), ventana 60 s, sin persistencia
-// cross-instance. Límite honesto: igual que el rate-limit en memoria, en
-// serverless cada instancia lleva su propio Set; frena el doble-clic contra
-// la misma instancia, no es garantía distribuida.
-const INFLIGHT_TTL_MS = 60_000;
-const inflightByHash = new Map<string, number>();
-function claimInflight(hash: string): boolean {
-  const now = Date.now();
-  for (const [k, ts] of inflightByHash) {
-    if (now - ts > INFLIGHT_TTL_MS) inflightByHash.delete(k);
-  }
-  if (inflightByHash.has(hash)) return false;
-  inflightByHash.set(hash, now);
-  return true;
-}
-
 function getClientIp(req: Request): string {
   const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) {
@@ -465,21 +446,24 @@ export async function POST(req: Request) {
       return { rawContent: parsedContent.value, usage: respJson?.usage || {}, providerMs };
     }
 
-    function legErrorResponse(err: any) {
+    function legErrorJson(err: any): { body: Record<string, unknown>; status: number } {
       const errorCode = typeof err?.errorCode === "string" ? err.errorCode : "EXTRACTION_FAILED";
       const status = typeof err?.status === "number" ? err.status : 500;
       const retryable = err?.retryable ?? (status === 429 || status === 502 || status === 503 || status === 504);
+      const withRetry = err?.suggestedRetryAfterSeconds
+        ? { suggestedRetryAfterSeconds: err.suggestedRetryAfterSeconds }
+        : {};
       if (errorCode === "META_HTTP_ERROR") {
-        return NextResponse.json(
-          { errorCode, status, error: `El proveedor de extracción devolvió HTTP ${status}. Conserva los archivos y vuelve a intentarlo en un momento.`, retryable, ...(err?.suggestedRetryAfterSeconds ? { suggestedRetryAfterSeconds: err.suggestedRetryAfterSeconds } : {}), requestId },
-          { status, ...(err?.retryAfterHeader ? { headers: { "Retry-After": err.retryAfterHeader } } : {}) }
-        );
+        return {
+          body: { errorCode, status, error: `El proveedor de extracción devolvió HTTP ${status}. Conserva los archivos y vuelve a intentarlo en un momento.`, retryable, ...withRetry, requestId },
+          status,
+        };
       }
       if (errorCode === "TRUNCATED_OUTPUT") {
-        return NextResponse.json(
-          { errorCode, error: "Document is too dense; output was truncated by model token limits. Please split multi-page shipments.", retryable: false, requestId },
-          { status }
-        );
+        return {
+          body: { errorCode, error: "Document is too dense; output was truncated by model token limits. Please split multi-page shipments.", retryable: false, requestId },
+          status,
+        };
       }
       const messages: Record<string, string> = {
         PROVIDER_TIMEOUT: "La extracción tardó demasiado y se canceló. Conserva los archivos y vuelve a intentarlo.",
@@ -488,63 +472,103 @@ export async function POST(req: Request) {
         META_EMPTY_CHOICE: "No response choice returned by Meta Model API",
         MALFORMED_PROVIDER_OUTPUT: "El proveedor de extracción devolvió datos mal formados. Conserva los archivos y vuelve a intentarlo.",
       };
-      return NextResponse.json(
-        { errorCode, error: messages[errorCode] ?? "La extracción falló. Conserva los archivos y vuelve a intentarlo.", retryable, ...(err?.suggestedRetryAfterSeconds ? { suggestedRetryAfterSeconds: err.suggestedRetryAfterSeconds } : {}), requestId },
-        { status }
-      );
+      return {
+        body: { errorCode, error: messages[errorCode] ?? "La extracción falló. Conserva los archivos y vuelve a intentarlo.", retryable, ...withRetry, requestId },
+        status,
+      };
     }
 
-    let invLeg: { rawContent: unknown; usage: any; providerMs: number };
-    let plLeg: { rawContent: unknown; usage: any; providerMs: number };
-    try {
-      [invLeg, plLeg] = await Promise.all([
-        fetchLeg("invoice", normalizedInvUrl),
-        fetchLeg("packing", normalizedPlUrl),
-      ]);
-    } catch (legErr) {
-      return legErrorResponse(legErr);
-    }
-
-    // fetchLeg ya validó que cada contenido es JSON; se combinan los dos
-    // documentos antes de normalizar con el pipeline existente.
-    const combined = {
-      invoice: (invLeg.rawContent as unknown as any)?.invoice ?? {},
-      packing_list: (plLeg.rawContent as unknown as any)?.packing_list ?? {},
-    };
-    const extracted = normalizeExtractedPayload(combined);
-    const inTok =
-      Number(invLeg.usage.prompt_tokens || invLeg.usage.input_tokens || 800) +
-      Number(plLeg.usage.prompt_tokens || plLeg.usage.input_tokens || 800);
-    const outTok =
-      Number(invLeg.usage.completion_tokens || invLeg.usage.output_tokens || 1250) +
-      Number(plLeg.usage.completion_tokens || plLeg.usage.output_tokens || 1250);
-    const estimatedCallCostUsd = Number(
-      ((inTok / 1_000_000) * 1.25 + (outTok / 1_000_000) * 4.25).toFixed(5)
-    );
-    const providerMs = Math.max(invLeg.providerMs, plLeg.providerMs);
-    const latencySeconds = Number(
-      ((performance.now() - t0) / 1000).toFixed(2)
-    );
-
-    stageLog(requestId, "normalized", tStart, {
-      provider_ms: Math.round(performance.now() - tProvider0),
+    // STREAMING SSE: el borde público corta conexiones ~30 s sin bytes.
+    // Se responde 200 inmediato con heartbeats cada 10 s y UN ÚNICO frame
+    // `data:` final con el JSON íntegro (éxito o error estructurado).
+    // Ningún byte parcial se interpreta como éxito: sin `data:` completo y
+    // con `extracted`, el cliente falla con STREAM_TRUNCATED.
+    const encoder = new TextEncoder();
+    const activeHash = inflightHash;
+    const stream = new ReadableStream({
+      start(controller) {
+        const send = (chunk: string) => {
+          try {
+            controller.enqueue(encoder.encode(chunk));
+          } catch {
+            /* cliente desconectado */
+          }
+        };
+        send(`: ping requestId=${requestId}\n\n`);
+        const heartbeat = setInterval(() => {
+          send(`: ping t=${Date.now()}\n\n`);
+        }, SSE_HEARTBEAT_MS);
+        (async () => {
+          try {
+            const [invLeg, plLeg] = await Promise.all([
+              fetchLeg("invoice", normalizedInvUrl),
+              fetchLeg("packing", normalizedPlUrl),
+            ]);
+            // fetchLeg ya validó que cada contenido es JSON; se combinan
+            // los dos documentos antes de normalizar con el pipeline existente.
+            const combined = {
+              invoice: (invLeg.rawContent as unknown as any)?.invoice ?? {},
+              packing_list: (plLeg.rawContent as unknown as any)?.packing_list ?? {},
+            };
+            const extracted = normalizeExtractedPayload(combined);
+            const inTok =
+              Number(invLeg.usage.prompt_tokens || invLeg.usage.input_tokens || 800) +
+              Number(plLeg.usage.prompt_tokens || plLeg.usage.input_tokens || 800);
+            const outTok =
+              Number(invLeg.usage.completion_tokens || invLeg.usage.output_tokens || 1250) +
+              Number(plLeg.usage.completion_tokens || plLeg.usage.output_tokens || 1250);
+            const estimatedCallCostUsd = Number(
+              ((inTok / 1_000_000) * 1.25 + (outTok / 1_000_000) * 4.25).toFixed(5)
+            );
+            const latencySeconds = Number(
+              ((performance.now() - t0) / 1000).toFixed(2)
+            );
+            stageLog(requestId, "normalized", tStart, {
+              provider_ms: Math.round(performance.now() - tProvider0),
+            });
+            const totalMs = Math.round(performance.now() - tStart);
+            stageLog(requestId, "responded", tStart, { total_ms: totalMs });
+            send(`data: ${JSON.stringify({
+              extracted,
+              usage: { prompt_tokens: inTok, completion_tokens: outTok },
+              latency_seconds: latencySeconds,
+              estimated_call_cost_usd: estimatedCallCostUsd,
+              normalizedInvoiceDataUrl: normalizedInvUrl,
+              normalizedPackingListDataUrl: normalizedPlUrl,
+              requestId,
+              timings: {
+                total_ms: totalMs,
+                raster_ms: rasterMs,
+                provider_ms: Math.round(performance.now() - tProvider0),
+                provider_ms_invoice: invLeg.providerMs,
+                provider_ms_packing: plLeg.providerMs,
+              },
+            })}\n\n`);
+          } catch (legErr) {
+            const { body } = legErrorJson(legErr);
+            send(`data: ${JSON.stringify(body)}\n\n`);
+          } finally {
+            clearInterval(heartbeat);
+            try {
+              controller.close();
+            } catch {
+              /* ya cerrada */
+            }
+            if (activeHash) releaseInflight(activeHash);
+          }
+        })();
+      },
+      cancel() {
+        if (activeHash) releaseInflight(activeHash);
+      },
     });
-    const totalMs = Math.round(performance.now() - tStart);
-    stageLog(requestId, "responded", tStart, { total_ms: totalMs });
-    return NextResponse.json({
-      extracted,
-      usage: { prompt_tokens: inTok, completion_tokens: outTok },
-      latency_seconds: latencySeconds,
-      estimated_call_cost_usd: estimatedCallCostUsd,
-      normalizedInvoiceDataUrl: normalizedInvUrl,
-      normalizedPackingListDataUrl: normalizedPlUrl,
-      requestId,
-      timings: {
-        total_ms: totalMs,
-        raster_ms: rasterMs,
-        provider_ms: Math.round(performance.now() - tProvider0),
-        provider_ms_invoice: invLeg.providerMs,
-        provider_ms_packing: plLeg.providerMs,
+    inflightHash = null; // la liberación la hace el stream (o su cancel)
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (err: any) {
@@ -562,6 +586,6 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   } finally {
-    if (inflightHash) inflightByHash.delete(inflightHash);
+    if (inflightHash) releaseInflight(inflightHash);
   }
 }

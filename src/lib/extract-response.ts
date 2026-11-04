@@ -13,8 +13,17 @@
  *   transitoria del proveedor, no formato ni tamaño).
  * Por eso proveedor 50 s (cubre 38,5 s medidos + margen) < cliente 57 s <
  * plataforma 60 s (Netlify Functions síncronas, ver netlify.toml). Sin
- * reintentos automáticos en ningún nivel.
+ * reintentos automáticos en ningún nivel. ADEMÁS el borde corta conexiones
+ * ~30 s sin bytes: la ruta emite SSE con heartbeat cada 10 s, así que una
+ * pata de 40-50 s ya no muere por inactividad (límite que queda: 60 s de
+ * ejecución).
  */
+/**
+ * Heartbeat SSE cada 10 s: el borde público corta conexiones ~30 s sin
+ * bytes, así que cada pata larga debe emitir tráfico mucho antes.
+ */
+export const SSE_HEARTBEAT_MS = 10_000;
+
 export const EXTRACTION_TIMEOUTS = {
   providerMs: 50_000,
   clientMs: 57_000,
@@ -71,12 +80,119 @@ export async function readExtractResponse(
   }
   const data = parsed.value as Record<string, unknown>;
   if (!resp.ok || data.error) {
+    return mapExtractData(data, resp.status);
+  }
+  return data;
+}
+
+/**
+ * Consume una respuesta SSE de extracción (`text/event-stream`):
+ * ignora heartbeats (`: ping` / `{"type":"heartbeat"}`), exige UN ÚNICO
+ * frame `data:` final con JSON íntegro y `extracted`. Sin `data:` completo
+ * (corte, truncado, cancelación) lanza STREAM_TRUNCATED: un 200 parcial
+ * nunca es éxito y nada parcial se aplica.
+ */
+export async function consumeStreamedExtract(
+  resp: Response,
+  opts: { idleMs?: number } = {}
+): Promise<Record<string, unknown>> {
+  const idleMs = opts.idleMs ?? 0;
+  if (!resp.body) {
+    const text = await resp.text();
+    const parsed = tryParseJson(text);
+    if (!parsed.ok || !parsed.value || typeof parsed.value !== "object") {
+      throw { code: "STREAM_TRUNCATED", status: resp.status } as ExtractResponseError;
+    }
+    return mapExtractData(parsed.value as Record<string, unknown>, resp.status);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const dataFrames: string[] = [];
+  const pumpIdle = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    if (idleMs <= 0) return reader.read();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const readP = reader.read();
+      const timeoutP = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => {
+          const e = new Error(`sin bytes durante ${idleMs}ms`) as Error & { code?: string };
+          e.code = "STREAM_TRUNCATED";
+          rej(e);
+        }, idleMs);
+      });
+      return await Promise.race([readP, timeoutP]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+  try {
+    for (;;) {
+      let res: ReadableStreamReadResult<Uint8Array>;
+      try {
+        res = await pumpIdle();
+      } catch (err) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* noop */
+        }
+        if ((err as { code?: unknown })?.code === "STREAM_TRUNCATED") throw err;
+        throw { code: "STREAM_TRUNCATED", status: resp.status } as ExtractResponseError;
+      }
+      if (res.done) break;
+      buffer += decoder.decode(res.value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        for (const line of frame.split("\n")) {
+          const t = line.trim();
+          if (!t) continue;
+          if (t.startsWith(":")) continue; // heartbeat SSE
+          if (t.startsWith("data:")) {
+            const payload = t.slice(5).trim();
+            if (payload.startsWith("{")) {
+              try {
+                const v = JSON.parse(payload) as { type?: unknown };
+                if (v && v.type === "heartbeat") continue;
+              } catch {
+                /* JSON parcial: conservar para fallar íntegro abajo */
+              }
+            }
+            dataFrames.push(payload);
+          }
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* noop */
+    }
+  }
+  if (dataFrames.length === 0) {
+    throw { code: "STREAM_TRUNCATED", status: resp.status } as ExtractResponseError;
+  }
+  const parsed = tryParseJson(dataFrames[dataFrames.length - 1]);
+  if (!parsed.ok || !parsed.value || typeof parsed.value !== "object") {
+    throw { code: "STREAM_TRUNCATED", status: resp.status } as ExtractResponseError;
+  }
+  return mapExtractData(parsed.value as Record<string, unknown>, resp.status);
+}
+
+function mapExtractData(
+  data: Record<string, unknown>,
+  status: number
+): Record<string, unknown> {
+  if (data.error) {
     const err: ExtractResponseError = {
       code:
         typeof data.errorCode === "string" && data.errorCode
           ? data.errorCode
           : "NON_JSON_RESPONSE",
-      status: resp.status,
+      status,
       retryAfterSeconds:
         typeof data.retryAfterSeconds === "number"
           ? data.retryAfterSeconds
@@ -89,6 +205,21 @@ export async function readExtractResponse(
     throw err;
   }
   return data;
+}
+
+/**
+ * Punto de entrada del cliente: rama SSE (`text/event-stream`) o lectura
+ * bufferizada clásica. Conserva códigos estables en ambos casos.
+ */
+export async function consumeExtractResponse(
+  resp: Response,
+  opts: { idleMs?: number } = {}
+): Promise<Record<string, unknown>> {
+  const ct = resp.headers.get("content-type") || "";
+  if (ct.includes("text/event-stream")) {
+    return consumeStreamedExtract(resp, opts);
+  }
+  return readExtractResponse(resp);
 }
 
 /** Clasifica un fallo de fetch (timeout / red) sin exponer el mensaje crudo. */
